@@ -1,21 +1,8 @@
-name: Build Mapping Workflow
+name: Upgrade Application Workflow
 
 on:
   workflow_call:
     inputs:
-      mapping-name:
-        description: 'Name of the mapping (e.g., shedlock, spring-boot, etc.)'
-        required: true
-        type: string
-      repo-url:
-        description: 'Url of the repository to map'
-        required: true
-        type: string
-      coordinates:
-        description: 'Artifact coordinates you want to map (e.g., net.javacrumbs.shedlock:shedlock-spring)'
-        required: false
-        type: string
-        default: ''
       java-version:
         description: 'Version of java to use'
         required: false
@@ -26,6 +13,10 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
+      build-tool-run-cmd:
+        description: 'Build tool run command to execute after upgrade-plan apply'
+        required: false
+        type: string
     secrets:
       GH_PULL_REQUEST_TOKEN:
         required: true
@@ -33,12 +24,12 @@ on:
         required: true
       BROADCOM_SPRING_PASSWORD:
         required: true
+
 jobs:
-  mapping:
+  upgrade:
     runs-on: ${{ inputs.runs-on }}
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK
@@ -46,7 +37,7 @@ jobs:
         with:
           java-version: ${{ inputs.java-version }}
           distribution: 'liberica'
-      - name: Configure Maven Settings
+      - name: Generates Maven Settings
         uses: 's4u/maven-settings-action@v3.1.0'
         with:
           servers: '[{"id": "tanzu-spring-release", "username":  "${{ secrets.BROADCOM_SPRING_USERNAME }}", "password": "${{ secrets.BROADCOM_SPRING_PASSWORD }}"}]'
@@ -88,28 +79,35 @@ jobs:
                 }
             }
           EOF
-      - name: Build mapping
+      - name: Runs Spring Application Advisor
         continue-on-error: true
         env:
+          GIT_TOKEN_FOR_PRS: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
           CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
-          MAPPING_CONFIG_REPO: ${{ inputs.repo-url }}
-          MAPPING_CONFIG_COORDINATES: ${{ inputs.coordinates }}
-          MAPPING_CONFIG_SLUG: ${{ inputs.mapping-name }}
+          SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_URI: "https://github.com/rabeyta/saa-mappings.git"
+          SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
+          SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH: ".advisor/mappings/"
+          SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH: "main"
+          BUILD_TOOL_RUN_COMMAND: "${{ inputs.build-tool-run-cmd }}"
         run: |
           # download the cli
           echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
           curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
           tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
           
-          echo "Running advisor with:"
-          echo "  Git Repo: '$MAPPING_CONFIG_REPO'"
-          echo "  Artifact Coordinates: '$MAPPING_CONFIG_COORDINATES'"
-          echo "  Desired Slug: '$MAPPING_CONFIG_SLUG'"
+          echo "Running advisor with mapping configuration:"
+          echo "  Mapping Git Repo: $SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_URI"
+          echo "  Mapping Git Path: $SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH"
+          echo "  Mapping Git Branch: $SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH"
           
-          /tmp/advisor mapping build -r "$MAPPING_CONFIG_REPO" \
-            ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} \
-            ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"}
+          # update the build config (required for upgrade-plan)
+          echo "Updating the build config"
+          /tmp/advisor build-config get
+          
+          # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
+          echo "Running upgarde-plan apply"
+          /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --build-tool-run-cmd=$BUILD_TOOL_RUN_COMMAND
           
           # clean up
           rm /tmp/advisor-linux.tar
@@ -118,12 +116,3 @@ jobs:
         if: always() && hashFiles('.advisor/errors/') != ''
         run: |
           cat .advisor/errors/*
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
-          commit-message: "${{ inputs.mapping-name }} mapping update"
-          title: "${{ inputs.mapping-name }} mapping update"
-          body: "Automatic ${{ inputs.mapping-name }} mapping update"
-          branch: "${{ inputs.mapping-name }}-mapping-update"
-          add-paths: ".advisor/mappings"
