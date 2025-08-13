@@ -85,7 +85,7 @@ jobs:
           GIT_TOKEN_FOR_PRS: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
           CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
-          SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_URI: "https://github.com/rabeyta/saa-mappings.git"
+          SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_URI: "https://github.com/abeyta-labs/saa-mappings.git"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH: ".advisor/mappings/"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH: "main"
@@ -106,7 +106,7 @@ jobs:
           /tmp/advisor build-config get
           
           # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
-          echo "Running upgarde-plan apply"
+          echo "Running upgrade-plan apply"
           /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --build-tool-run-cmd=$BUILD_TOOL_RUN_COMMAND
           
           # clean up
