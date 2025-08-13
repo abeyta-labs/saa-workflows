@@ -13,8 +13,8 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
-      build-tool-run-cmd:
-        description: 'Build tool run command to execute after upgrade-plan apply'
+      after-upgrade-command:
+        description: 'Build tool command to execute after upgrade-plan apply'
         required: false
         type: string
     secrets:
@@ -89,7 +89,7 @@ jobs:
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH: ".advisor/mappings/"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH: "main"
-          BUILD_TOOL_RUN_COMMAND: "${{ inputs.build-tool-run-cmd }}"
+          AFTER_UPGRADE_RUN_COMMAND: "${{ inputs.after-upgrade-run-command }}"
         run: |
           # download the cli
           echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
@@ -107,7 +107,7 @@ jobs:
           
           # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
           echo "Running upgrade-plan apply"
-          /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --build-tool-run-cmd=$BUILD_TOOL_RUN_COMMAND
+          /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --after-upgrade-cmd=$AFTER_UPGRADE_RUN_COMMAND
           
           # clean up
           rm /tmp/advisor-linux.tar
