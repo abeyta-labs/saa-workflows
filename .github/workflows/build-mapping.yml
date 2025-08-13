@@ -99,7 +99,7 @@ jobs:
         run: |
           cli="advisor"
           
-          if [ "${{ inputs.runs-on }}" != "self-hosted" ] then;
+          if [ "${{ inputs.runs-on }}" != "self-hosted" ]; then
             # download the cli
             echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
             curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
