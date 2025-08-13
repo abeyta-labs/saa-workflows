@@ -97,23 +97,25 @@ jobs:
           MAPPING_CONFIG_COORDINATES: ${{ inputs.coordinates }}
           MAPPING_CONFIG_SLUG: ${{ inputs.mapping-name }}
         run: |
-          # download the cli
-          echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
-          curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
-          tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
+          cli="advisor"
+          
+          if [ "${{ inputs.runs-on }}" != "self-hosted" ] then;
+            # download the cli
+            echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
+            curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
+            tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
+            cli="/tmp/advisor"
+          fi
           
           echo "Running advisor with:"
           echo "  Git Repo: '$MAPPING_CONFIG_REPO'"
           echo "  Artifact Coordinates: '$MAPPING_CONFIG_COORDINATES'"
           echo "  Desired Slug: '$MAPPING_CONFIG_SLUG'"
           
-          /tmp/advisor mapping build -r "$MAPPING_CONFIG_REPO" \
+          $cli mapping build -r "$MAPPING_CONFIG_REPO" \
             ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} \
             ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"}
-          
-          # clean up
-          rm /tmp/advisor-linux.tar
-          rm /tmp/advisor
+
       - name: Get errors if exist
         if: always() && hashFiles('.advisor/errors/') != ''
         run: |
