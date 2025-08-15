@@ -25,7 +25,7 @@ on:
         description: 'Runner type (e.g., ubuntu-latest, self-hosted)'
         required: false
         type: string
-        default: 'ubuntu-latest'
+        default: 'self-hosted'
     secrets:
       GH_PULL_REQUEST_TOKEN:
         required: true
