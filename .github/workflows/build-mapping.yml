@@ -35,6 +35,7 @@ on:
         required: true
 jobs:
   mapping:
+    timeout-minutes: 900
     runs-on: ${{ inputs.runs-on }}
     permissions:
       contents: write
