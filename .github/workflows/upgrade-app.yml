@@ -31,7 +31,17 @@ jobs:
     permissions:
       contents: read
     steps:
+      # checkout calling repo's code
       - uses: actions/checkout@v4
+      # checkout saa-workflows so we can access the scripts here
+      - uses: actions/checkout@v4
+        with:
+          repository: abeyta-labs/saa-workflows
+          path: .github/abeyta-labs/saa-workflows
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -83,6 +93,7 @@ jobs:
         continue-on-error: true
         env:
           GIT_TOKEN_FOR_PRS: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
           CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_URI: "https://github.com/abeyta-labs/saa-mappings.git"
@@ -105,9 +116,28 @@ jobs:
           echo "Updating the build config"
           /tmp/advisor build-config get
           
-          # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
-          echo "Running upgrade-plan apply"
-          /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --after-upgrade-cmd=$AFTER_UPGRADE_RUN_COMMAND
+          UPGRADE_PLAN_OUTPUT="upgrade-plan-get-output.txt"
+          # run upgrade-plan get - see if we have missing mapping files
+          /tmp/advisor upgrade-plan get 2>&1 | tee $UPGRADE_PLAN_OUTPUT
+          
+          NO_UPGRADES_EXIST_PHRASE="No upgrade plans available"
+          MAPPING_MISSING_PHRASE="Please request your administrator to configure the projects of the following dependencies"
+          if grep -q "$MAPPING_MISSING_PHRASE" $UPGRADE_PLAN_OUTPUT; then
+            echo "Mappings are missing, lets create new mapping jobs"
+            # parse out the missing artifacts from saa output
+            grep -E $'^\t- [a-zA-Z]' "$UPGRADE_PLAN_OUTPUT" | sed $'s/^\t- //' > artifacts.txt
+            # move artifacts file into saa workflows and work from there
+            cp artifacts.txt .github/abeyta-labs/saa-workflows/scripts/artifacts.txt
+            cd .github/abeyta-labs/saa-workflows/scripts
+            # attempt to find repo urls for the missing artifacts
+            python3 bulk-repo-lookup.py artifacts.txt -o artifact-details.json
+            # generate mappings for artifacts where we have the repo urls found
+            python3 generate-mapping-workflow.py --repo abeyta-labs/saa-mappings
+          elif ! grep -q "$NO_UPGRADES_EXIST_PHRASE" "$UPGRADE_PLAN_OUTPUT"; then 
+            # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
+            echo "Running upgrade-plan apply"
+            /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --after-upgrade-cmd=$AFTER_UPGRADE_RUN_COMMAND
+          fi
           
           # clean up
           rm /tmp/advisor-linux.tar
