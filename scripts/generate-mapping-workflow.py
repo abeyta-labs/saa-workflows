@@ -64,10 +64,33 @@ def get_unique_repositories(artifacts: List[Dict]) -> Tuple[List[Dict], List[Dic
 
     return unique_artifacts, duplicate_artifacts
 
+def build_workflow_command(artifact: Dict, target_repo: str = "org/repo",
+                           workflow_file: str = "generate-mapping-workflow.yml",
+                           ref: str = "main") -> str:
+    """
+    Build the gh CLI command string for a workflow trigger.
+
+    Returns:
+        The full gh CLI command as a string
+    """
+    slug = artifact.get("artifact_id", "")
+    repo_url = artifact.get("repository_url", "")
+    coordinates = artifact.get("artifact", "")
+
+    # Build the command as a string for display
+    cmd = (f"gh workflow run {workflow_file} "
+           f"--repo {target_repo} "
+           f"--ref {ref} "
+           f"--field slug=\"{slug}\" "
+           f"--field repo_url=\"{repo_url}\" "
+           f"--field coordinates=\"{coordinates}\"")
+
+    return cmd
+
 def trigger_workflow(artifact: Dict, target_repo: str = "org/repo",
                      workflow_file: str = "generate-mapping-workflow.yml",
                      ref: str = "main", dry_run: bool = False,
-                     delay_seconds: int = 0) -> bool:
+                     delay_seconds: int = 0) -> Tuple[bool, str]:
     """
     Trigger a GitHub workflow using gh CLI.
 
@@ -80,7 +103,7 @@ def trigger_workflow(artifact: Dict, target_repo: str = "org/repo",
         delay_seconds: Seconds to wait after triggering (for rate limiting)
 
     Returns:
-        True if successful, False otherwise
+        Tuple of (success: bool, command: str)
     """
     # Prepare the workflow inputs
     slug = artifact.get("artifact_id", "")
@@ -98,11 +121,14 @@ def trigger_workflow(artifact: Dict, target_repo: str = "org/repo",
         "--field", f"coordinates={coordinates}"
     ]
 
+    # Build command string for display/logging
+    command_str = build_workflow_command(artifact, target_repo, workflow_file, ref)
+
     if dry_run:
-        print(f"[DRY RUN] Would execute: {' '.join(cmd)}")
+        print(f"[DRY RUN] Would execute: {command_str}")
         if delay_seconds > 0:
             print(f"[DRY RUN] Would wait {delay_seconds} second(s) after trigger")
-        return True
+        return True, command_str
 
     try:
         print(f"Triggering workflow for artifact: {coordinates}")
@@ -117,12 +143,12 @@ def trigger_workflow(artifact: Dict, target_repo: str = "org/repo",
             print(f"  Waiting {delay_seconds} second(s) before next trigger (rate limit protection)...")
             time.sleep(delay_seconds)
 
-        return True
+        return True, command_str
 
     except subprocess.CalledProcessError as e:
         print(f"✗ Failed to trigger workflow for {coordinates}")
         print(f"  Error: {e.stderr}")
-        return False
+        return False, command_str
 
 def print_summary_section(title: str, char: str = "="):
     """Print a formatted section header."""
@@ -169,7 +195,14 @@ def main():
         "triggered_artifacts": [],
         "failed_artifacts": [],
         "unresolved_artifacts": [],
-        "duplicate_artifacts": []
+        "duplicate_artifacts": [],
+        "workflow_commands": [],  # Store commands for summary
+        "failed_commands": [],    # Store failed commands
+        "workflow_config": {      # Store configuration for summary
+            "repo": args.repo,
+            "workflow": args.workflow,
+            "ref": args.ref
+        }
     }
 
     # Load the artifact details
@@ -212,17 +245,27 @@ def main():
             # Don't delay after the last workflow
             delay = args.delay if i < len(unique_artifacts) - 1 else 0
 
-            if trigger_workflow(artifact, args.repo, args.workflow, args.ref,
-                                args.dry_run, delay):
+            success, command = trigger_workflow(artifact, args.repo, args.workflow, args.ref,
+                                                args.dry_run, delay)
+
+            if success:
                 processing_results["workflows_triggered"] += 1
                 processing_results["triggered_artifacts"].append(artifact)
+                processing_results["workflow_commands"].append({
+                    "artifact": artifact,
+                    "command": command
+                })
             else:
                 processing_results["workflows_failed"] += 1
                 processing_results["failed_artifacts"].append(artifact)
+                processing_results["failed_commands"].append({
+                    "artifact": artifact,
+                    "command": command
+                })
             print("-" * 40)
 
     # Print comprehensive summary
-    print_summary_section("PROCESSING SUMMARY", "═")
+    print_summary_section("PROCESSING SUMMARY", "╔")
 
     # Overall statistics
     print("\n📊 OVERALL STATISTICS:")
@@ -259,6 +302,21 @@ def main():
         for artifact in processing_results["unresolved_artifacts"]:
             print(f"\n{format_artifact_info(artifact)}")
 
+        # Print manual resolution commands
+        print("\n📝 MANUAL RESOLUTION COMMANDS:")
+        print("  Once you've determined the repository URLs, use these commands:\n")
+        for artifact in processing_results["unresolved_artifacts"]:
+            artifact_coords = artifact.get('artifact', 'N/A')
+            artifact_slug = artifact.get('artifact_id', 'N/A')
+            print(f"  For {artifact_coords}:")
+            print(f"    gh workflow run {args.workflow} \\")
+            print(f"      --repo {args.repo} \\")
+            print(f"      --ref {args.ref} \\")
+            print(f"      --field slug=\"{artifact_slug}\" \\")
+            print(f"      --field repo_url=\"<REPLACE_WITH_REPOSITORY_URL>\" \\")
+            print(f"      --field coordinates=\"{artifact_coords}\"")
+            print()
+
     # Duplicate artifacts that were skipped
     if processing_results["duplicate_artifacts"]:
         print("\n📋 SKIPPED DUPLICATE REPOSITORY ARTIFACTS:")
@@ -266,7 +324,7 @@ def main():
             print(f"  • {artifact.get('artifact', 'N/A')} (duplicate of {artifact.get('repository_url', 'N/A')})")
 
     # Final status
-    print_summary_section("FINAL STATUS", "═")
+    print_summary_section("FINAL STATUS", "╔")
 
     if processing_results["workflows_failed"] > 0:
         print("❌ COMPLETED WITH ERRORS")
@@ -290,7 +348,7 @@ def main():
     if os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('GITHUB_STEP_SUMMARY'):
         write_github_summary(processing_results)
 
-    print("\n" + "═" * 80)
+    print("\n" + "╔" * 80)
     print(f"Execution completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     return exit_code
@@ -317,18 +375,86 @@ def write_github_summary(results: Dict):
         f.write(f"| Workflows Triggered | {results['workflows_triggered']} |\n")
         f.write(f"| Workflows Failed | {results['workflows_failed']} |\n\n")
 
+        # Workflow configuration
+        config = results.get('workflow_config', {})
+        f.write("### Workflow Configuration\n")
+        f.write("| Parameter | Value |\n")
+        f.write("|-----------|-------|\n")
+        f.write(f"| Target Repository | `{config.get('repo', 'N/A')}` |\n")
+        f.write(f"| Workflow File | `{config.get('workflow', 'N/A')}` |\n")
+        f.write(f"| Git Ref | `{config.get('ref', 'N/A')}` |\n\n")
+
+        # Successfully triggered workflows with commands
+        if results.get('workflow_commands'):
+            f.write("### ✅ Successfully Triggered Workflows\n\n")
+            f.write("<details>\n")
+            f.write("<summary>Click to view gh CLI commands for triggered workflows</summary>\n\n")
+
+            for cmd_info in results['workflow_commands']:
+                artifact = cmd_info['artifact']
+                command = cmd_info['command']
+                f.write(f"#### {artifact.get('artifact', 'N/A')}\n")
+                f.write(f"**Repository:** `{artifact.get('repository_url', 'N/A')}`\n\n")
+                f.write("```bash\n")
+                f.write(f"{command}\n")
+                f.write("```\n\n")
+
+            f.write("</details>\n\n")
+
+        # Failed workflows with commands
+        if results.get('failed_commands'):
+            f.write("### ❌ Failed Workflow Triggers\n\n")
+            f.write("<details>\n")
+            f.write("<summary>Click to view gh CLI commands for failed workflows</summary>\n\n")
+
+            for cmd_info in results['failed_commands']:
+                artifact = cmd_info['artifact']
+                command = cmd_info['command']
+                f.write(f"#### {artifact.get('artifact', 'N/A')}\n")
+                f.write(f"**Repository:** `{artifact.get('repository_url', 'N/A')}`\n\n")
+                f.write("```bash\n")
+                f.write(f"{command}\n")
+                f.write("```\n\n")
+
+            f.write("</details>\n\n")
+
         # Unresolved artifacts
         if results['unresolved_artifacts']:
             f.write("### ⚠️ Unresolved Artifacts (Manual Action Required)\n\n")
             for artifact in results['unresolved_artifacts']:
                 f.write(f"- **{artifact.get('artifact', 'N/A')}**\n")
                 f.write(f"  - Error: `{artifact.get('error', 'N/A')}`\n")
+            f.write("\n")
+
+        # Specific manual commands for each unresolved artifact
+        if results['unresolved_artifacts'] and results.get('workflow_config'):
+            f.write("### 🔧 Manual Resolution Commands\n\n")
+            f.write("For unresolved artifacts, once you've determined the repository URL, use these pre-filled commands:\n\n")
+
+            for artifact in results['unresolved_artifacts']:
+                artifact_coords = artifact.get('artifact', 'N/A')
+                artifact_slug = artifact.get('artifact_id', 'N/A')
+
+                f.write(f"#### {artifact_coords}\n")
+                f.write(f"**Error:** {artifact.get('error', 'N/A')}\n\n")
+                f.write("```bash\n")
+                f.write(f"gh workflow run {config.get('workflow', 'generate-mapping-workflow.yml')} \\\n")
+                f.write(f"  --repo {config.get('repo', 'org/repo')} \\\n")
+                f.write(f"  --ref {config.get('ref', 'main')} \\\n")
+                f.write(f"  --field slug=\"{artifact_slug}\" \\\n")
+                f.write(f"  --field repo_url=\"<REPLACE_WITH_REPOSITORY_URL>\" \\\n")
+                f.write(f"  --field coordinates=\"{artifact_coords}\"\n")
+                f.write("```\n\n")
+
+            f.write("**Note:** Replace `<REPLACE_WITH_REPOSITORY_URL>` with the actual repository URL for each artifact.\n\n")
 
         # Success status
         if results['workflows_failed'] == 0 and results['workflows_triggered'] > 0:
             f.write("\n✅ **All workflows triggered successfully!**\n")
         elif results['workflows_failed'] > 0:
             f.write(f"\n❌ **{results['workflows_failed']} workflow(s) failed to trigger**\n")
+        elif results['workflows_triggered'] == 0:
+            f.write("\n⚠️ **No workflows were triggered**\n")
 
 if __name__ == "__main__":
     import os
