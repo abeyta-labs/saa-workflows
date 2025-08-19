@@ -122,6 +122,7 @@ jobs:
           
           NO_UPGRADES_EXIST_PHRASE="No upgrade plans available"
           MAPPING_MISSING_PHRASE="Please request your administrator to configure the projects of the following dependencies"
+          SOME_UPGRADES_TO_APPLY="Some upgrades were not included in the upgrade plan"
           if grep -q "$MAPPING_MISSING_PHRASE" $UPGRADE_PLAN_OUTPUT; then
             echo "Mappings are missing, lets create new mapping jobs"
             # parse out the missing artifacts from saa output
@@ -133,7 +134,7 @@ jobs:
             python3 bulk-repo-lookup.py artifacts.txt -o artifact-details.json
             # generate mappings for artifacts where we have the repo urls found
             python3 generate-mapping-workflow.py --repo abeyta-labs/saa-mappings
-          elif ! grep -q "$NO_UPGRADES_EXIST_PHRASE" "$UPGRADE_PLAN_OUTPUT"; then 
+          elif ! grep -q "$NO_UPGRADES_EXIST_PHRASE" "$UPGRADE_PLAN_OUTPUT" || grep -q "$SOME_UPGRADES_TO_APPLY" "$UPGRADE_PLAN_OUTPUT"; then
             # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
             echo "Running upgrade-plan apply"
             /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --after-upgrade-cmd=$AFTER_UPGRADE_RUN_COMMAND
