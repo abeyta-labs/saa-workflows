@@ -13,10 +13,50 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
-      after-upgrade-command:
+      saa-debug:
+        description: 'Prints out SAA debug messages'
+        required: false
+        type: boolean
+        default: false
+      saa-build-tool:
+        description: 'Selects the build tool used to resolve the project dependencies options: mvnw, mvn, gradlew, gradle'
+        required: false
+        type: string
+      saa-build-tool-options:
+        description: 'Build arguments to pass to the build tool'
+        required: false
+        type: string
+      saa-build-tool-jvm-args:
+        description: 'JVM arguments to pass into the build tool (default: $BUILD_TOOL_JVM_ARGS)'
+        required: false
+        type: string
+      saa-force:
+        description: 'Force execution of full Upgrade Plan, including intermediate dependencies'
+        required: false
+        type: boolean
+        default: false
+      saa-path:
+        description: 'Selects the root directory of the source code repository (default: current directory)'
+        required: false
+        type: string
+      saa-remove-excluded-artifacts:
+        description: 'Removes excluded artifacts as part of upgrade plan'
+        required: false
+        type: boolean
+        default: false
+      saa-after-upgrade-command:
         description: 'Build tool command to execute after upgrade-plan apply'
         required: false
         type: string
+      saa-create-pr:
+        description: 'Generates a pull request with the code upgrades'
+        required: false
+        type: boolean
+        default: true
+      saa-squash:
+        description: 'Number of steps of the original Upgrade Plan that will be squashed as the first Upgrade Plan step'
+        required: false
+        type: number
     secrets:
       GH_PULL_REQUEST_TOKEN:
         required: true
@@ -100,7 +140,6 @@ jobs:
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH: ".advisor/mappings/"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH: "main"
-          AFTER_UPGRADE_RUN_COMMAND: "${{ inputs.after-upgrade-run-command }}"
         run: |
           # download the cli
           echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
@@ -112,17 +151,42 @@ jobs:
           echo "  Mapping Git Path: $SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH"
           echo "  Mapping Git Branch: $SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH"
           
-          # update the build config (required for upgrade-plan)
+          # build the build-config get command based on inputs
+          BUILD_CONFIG_CMD=()
+          BUILD_CONFIG_CMD+=("/tmp/advisor")
+          BUILD_CONFIG_CMD+=("build-config")
+          BUILD_CONFIG_CMD+=("get")
+          [[ "${{ inputs.saa-debug }}" == "true" ]] && BUILD_CONFIG_CMD+=("--debug")
+          [[ -n "${{ inputs.saa-build-tool }}" ]] && BUILD_CONFIG_CMD+=("--build-tool" "${{ inputs.saa-build-tool }}")
+          [[ -n "${{ inputs.saa-build-tool-options }}" ]] && BUILD_CONFIG_CMD+=("--build-tool-options" "${{ inputs.saa-build-tool-options }}")
+          [[ -n "${{ inputs.saa-path }}" ]] && BUILD_CONFIG_CMD+=("--path" "${{ inputs.saa-path }}")
+          
+          # update the build config
           echo "Updating the build config"
-          /tmp/advisor build-config get
+          echo "${BUILD_CONFIG_CMD[@]}"
+          "${BUILD_CONFIG_CMD[@]}"
           
           UPGRADE_PLAN_OUTPUT="upgrade-plan-get-output.txt"
-          # run upgrade-plan get - see if we have missing mapping files
-          /tmp/advisor upgrade-plan get 2>&1 | tee $UPGRADE_PLAN_OUTPUT
-          
           NO_UPGRADES_EXIST_PHRASE="No upgrade plans available"
           MAPPING_MISSING_PHRASE="Please request your administrator to configure the projects of the following dependencies"
           SOME_UPGRADES_TO_APPLY="Some upgrades were not included in the upgrade plan"
+          
+          # build the upgrade-plan get command based on inputs
+          UPGRADE_PLAN_GET_CMD=()
+          UPGRADE_PLAN_GET_CMD+=("/tmp/advisor")
+          UPGRADE_PLAN_GET_CMD+=("upgrade-plan")
+          UPGRADE_PLAN_GET_CMD+=("get")
+          [[ "${{ inputs.saa-debug }}" == "true" ]] && UPGRADE_PLAN_GET_CMD+=("--debug")
+          [[ "${{ inputs.saa-remove-excluded-artifacts }}" == "true" ]] && UPGRADE_PLAN_GET_CMD+=("--remove-excluded-artifacts")
+          [[ "${{ inputs.saa-force }}" == "true" ]] && UPGRADE_PLAN_GET_CMD+=("--force")
+          [[ -n "${{ inputs.saa-path }}" ]] && UPGRADE_PLAN_GET_CMD+=("--path" "${{ inputs.saa-path }}")
+          [[ -n "${{ inputs.saa-build-tool-options }}" ]] && UPGRADE_PLAN_GET_CMD+=("--build-tool-options" "${{ inputs.saa-build-tool-options }}")
+          [[ -n "${{ inputs.saa-squash }}" ]] && UPGRADE_PLAN_GET_CMD+=("--squash" "${{ inputs.saa-squash }}")
+          
+          # run upgrade-plan get - see if we have missing mapping files
+          echo "${UPGRADE_PLAN_GET_CMD[@]}"
+          "${UPGRADE_PLAN_GET_CMD[@]}" 2>&1 | tee $UPGRADE_PLAN_OUTPUT
+          
           if grep -q "$MAPPING_MISSING_PHRASE" $UPGRADE_PLAN_OUTPUT; then
             echo "Mappings are missing, lets create new mapping jobs"
             # parse out the missing artifacts from saa output
@@ -136,8 +200,27 @@ jobs:
             python3 generate-mapping-workflow.py --repo abeyta-labs/saa-mappings
           elif ! grep -q "$NO_UPGRADES_EXIST_PHRASE" "$UPGRADE_PLAN_OUTPUT" || grep -q "$SOME_UPGRADES_TO_APPLY" "$UPGRADE_PLAN_OUTPUT"; then
             # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
+            
+            # build the upgrade-plan get command based on inputs
+            UPGRADE_PLAN_APPLY_CMD=()
+            UPGRADE_PLAN_APPLY_CMD+=("/tmp/advisor")
+            UPGRADE_PLAN_APPLY_CMD+=("upgrade-plan")
+            UPGRADE_PLAN_APPLY_CMD+=("apply")
+            [[ "${{ inputs.saa-debug }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--debug")
+            [[ -n "${{ inputs.saa-path }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--path" "${{ inputs.saa-path }}")
+            [[ "${{ inputs.saa-force }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--force")
+            [[ "${{ inputs.saa-remove-excluded-artifacts }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--remove-excluded-artifacts")
+            [[ -n "${{ inputs.saa-build-tool }}" ]] && BUILD_CONFIG_CMD+=("--build-tool" "${{ inputs.saa-build-tool }}")
+            [[ -n "${{ inputs.saa-build-tool-options }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--build-tool-options" "${{ inputs.saa-build-tool-options }}")
+            [[ -n "${{ inputs.saa-build-tool-jvm-args }}" ]] && BUILD_CONFIG_CMD+=("--build-tool-jvm-args" "${{ inputs.saa-build-tool-jvm-args }}")
+            [[ -n "${{ inputs.saa-squash }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--squash" "${{ inputs.saa-squash }}")
+            [[ -n "${{ inputs.saa-after-upgrade-command }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--after-upgrade-cmd" "${{ inputs.saa-after-upgrade-command }}")
+            [[ "${{ inputs.saa-create-pr }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--push")
+            [[ "${{ inputs.saa-create-pr }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--token=$GIT_TOKEN_FOR_PRS")
+          
             echo "Running upgrade-plan apply"
-            /tmp/advisor upgrade-plan apply --push --token=$GIT_TOKEN_FOR_PRS --after-upgrade-cmd=$AFTER_UPGRADE_RUN_COMMAND
+            echo "${UPGRADE_PLAN_APPLY_CMD[@]}"
+            "${UPGRADE_PLAN_APPLY_CMD[@]}"
           fi
           
           # clean up
