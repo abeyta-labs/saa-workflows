@@ -199,9 +199,11 @@ jobs:
             # generate mappings for artifacts where we have the repo urls found
             python3 generate-mapping-workflow.py --repo abeyta-labs/saa-mappings
           elif ! grep -q "$NO_UPGRADES_EXIST_PHRASE" "$UPGRADE_PLAN_OUTPUT" || grep -q "$SOME_UPGRADES_TO_APPLY" "$UPGRADE_PLAN_OUTPUT"; then
+            # cleanup workspace of saa-workflow files prior to upgrading. They should be not included in the commit.
+            rm -rf .github/abeyta-labs/saa-workflows
+            rm $UPGRADE_PLAN_OUTPUT
             # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
-            
-            # build the upgrade-plan get command based on inputs
+            # build the upgrade-plan apply command based on inputs
             UPGRADE_PLAN_APPLY_CMD=()
             UPGRADE_PLAN_APPLY_CMD+=("/tmp/advisor")
             UPGRADE_PLAN_APPLY_CMD+=("upgrade-plan")
