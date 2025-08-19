@@ -56,7 +56,7 @@ on:
       saa-squash:
         description: 'Number of steps of the original Upgrade Plan that will be squashed as the first Upgrade Plan step'
         required: false
-        type: number
+        type: string
     secrets:
       GH_PULL_REQUEST_TOKEN:
         required: true
