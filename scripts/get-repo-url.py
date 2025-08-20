@@ -46,8 +46,8 @@ def clean_scm_url(url):
     # remove prefix of git if exists
     url = url.replace('git:', '')
 
-    # Remove .git suffix
-    url = url.replace('.git', '')
+    # Remove .git suffix and anything after it
+    url = re.sub(re.escape(".git") + r'.*', '', url)
 
     # Remove trailing slashes
     url = url.rstrip('/')
@@ -124,33 +124,6 @@ def get_repo_url(group_id, artifact_id, max_depth=10):
                 if '}' in elem.tag:
                     elem.tag = elem.tag.split('}')[1]
 
-            # Look for parent POM FIRST to check if it's the Apache root
-            parent = root.find('parent')
-            if parent is not None:
-                parent_group = parent.find('groupId')
-                parent_artifact = parent.find('artifactId')
-
-                # Check if the parent is the Apache root POM
-                if (parent_group is not None and parent_group.text == 'org.apache' and
-                        parent_artifact is not None and parent_artifact.text == 'apache'):
-
-                    if '--verbose' in sys.argv:
-                        print(f"Found Apache root parent, stopping traversal", file=sys.stderr)
-
-                    # Get the artifactId from the current POM (not the parent)
-                    current_artifact_elem = root.find('artifactId')
-                    if current_artifact_elem is not None and current_artifact_elem.text:
-                        project_name = current_artifact_elem.text
-
-                        # Construct and return the GitHub URL
-                        github_url = f"https://github.com/apache/{project_name}"
-
-                        if '--verbose' in sys.argv:
-                            print(f"Using current POM artifactId: {project_name}", file=sys.stderr)
-                            print(f"Returning Apache GitHub URL: {github_url}", file=sys.stderr)
-
-                        return github_url
-
             # Check for SCM section
             scm = root.find('.//scm')
             if scm is not None:
@@ -187,6 +160,27 @@ def get_repo_url(group_id, artifact_id, max_depth=10):
                         print(f"Found Sonatype root parent, stopping traversal as there is no information available", file=sys.stderr)
 
                     return None
+
+                    # Check if the parent is the Apache root POM
+                if (parent_group is not None and parent_group.text == 'org.apache' and
+                        parent_artifact is not None and parent_artifact.text == 'apache'):
+
+                    if '--verbose' in sys.argv:
+                        print(f"Found Apache root parent, stopping traversal", file=sys.stderr)
+
+                    # Get the artifactId from the current POM (not the parent)
+                    current_artifact_elem = root.find('artifactId')
+                    if current_artifact_elem is not None and current_artifact_elem.text:
+                        project_name = current_artifact_elem.text
+
+                        # Construct and return the GitHub URL
+                        github_url = f"https://github.com/apache/{project_name}"
+
+                        if '--verbose' in sys.argv:
+                            print(f"Using current POM artifactId: {project_name}", file=sys.stderr)
+                            print(f"Returning Apache GitHub URL: {github_url}", file=sys.stderr)
+
+                        return github_url
 
                 if all(elem is not None and elem.text for elem in [parent_group, parent_artifact, parent_version]):
                     current_group = parent_group.text
