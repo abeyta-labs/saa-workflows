@@ -87,6 +87,20 @@ jobs:
         with:
           java-version: ${{ inputs.java-version }}
           distribution: 'liberica'
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: org-maven-${{ runner.os }}-v1
+          restore-keys: org-maven-${{ runner.os }}-
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: org-gradle-${{ runner.os }}-v1
+          restore-keys: org-gradle-${{ runner.os }}-
       - name: Generates Maven Settings
         uses: 's4u/maven-settings-action@v3.1.0'
         with:
