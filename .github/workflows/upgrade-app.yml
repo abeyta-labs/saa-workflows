@@ -246,3 +246,4 @@ jobs:
         if: always() && hashFiles('.advisor/errors/') != ''
         run: |
           cat .advisor/errors/*
+          exit 1
