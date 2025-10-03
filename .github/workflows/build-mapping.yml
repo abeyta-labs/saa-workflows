@@ -127,7 +127,7 @@ jobs:
           echo "  Artifact Coordinates: '$MAPPING_CONFIG_COORDINATES'"
           echo "  Desired Slug: '$MAPPING_CONFIG_SLUG'"
           
-          $cli mapping build -d -r "$MAPPING_CONFIG_REPO" \
+          $cli mapping build -r "$MAPPING_CONFIG_REPO" \
             ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} \
             ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"}
 
