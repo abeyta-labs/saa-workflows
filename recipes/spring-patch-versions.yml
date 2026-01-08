@@ -1,0 +1,18 @@
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: me.abeyta.UpgradeAllSpringLatestPatch
+displayName: Upgrade All Spring Dependencies to Latest Patch
+description: Automatically upgrades all Spring dependencies to their latest patch version without changing minor versions.
+
+recipeList:
+  # Matches all org.springframework.* groupIds (boot, security, data, cloud, batch, integration, etc.)
+  - org.openrewrite.java.dependencies.UpgradeDependencyVersion:
+      groupId: org.springframework.*
+      artifactId: "*"
+      newVersion: "latest.patch"
+
+  # Matches org.springframework core (spring-core, spring-context, spring-beans, etc.)
+  - org.openrewrite.java.dependencies.UpgradeDependencyVersion:
+      groupId: org.springframework
+      artifactId: "*"
+      newVersion: "latest.patch"
