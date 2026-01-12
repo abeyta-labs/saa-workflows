@@ -1,0 +1,173 @@
+name: Build Mapping Workflow
+
+on:
+  workflow_call:
+    inputs:
+      mapping-name:
+        description: 'Name of the mapping (e.g., shedlock, spring-boot, etc.)'
+        required: true
+        type: string
+      repo-url:
+        description: 'Url of the repository to map'
+        required: true
+        type: string
+      coordinates:
+        description: 'Artifact coordinates you want to map (e.g., net.javacrumbs.shedlock:shedlock-spring)'
+        required: false
+        type: string
+        default: ''
+      java-version:
+        description: 'Version of java to use'
+        required: false
+        type: string
+        default: '17'
+      runs-on:
+        description: 'Runner type (e.g., ubuntu-latest, self-hosted)'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      GH_PULL_REQUEST_TOKEN:
+        required: true
+      BROADCOM_SPRING_USERNAME:
+        required: true
+      BROADCOM_SPRING_PASSWORD:
+        required: true
+      APP_ADVISOR_APP_ID:
+        required: true
+      APP_ADVISOR_APP_PRIVATE_KEY:
+        required: true
+jobs:
+  mapping:
+    timeout-minutes: 900
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ADVISOR_APP_ID }}
+          private-key: ${{ secrets.APP_ADVISOR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+#          repositories: |
+#            repo-a
+#            repo-b
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: 'liberica'
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: org-maven-${{ runner.os }}-v2
+          restore-keys: org-maven-${{ runner.os }}-v2
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: org-gradle-${{ runner.os }}-v2
+          restore-keys: org-gradle-${{ runner.os }}-v2
+      - name: Configure Maven Settings
+        uses: 's4u/maven-settings-action@v3.1.0'
+        with:
+          servers: '[{"id": "tanzu-spring-release", "username":  "${{ secrets.BROADCOM_SPRING_USERNAME }}", "password": "${{ secrets.BROADCOM_SPRING_PASSWORD }}"}]'
+          repositories: '[{"id":"tanzu-spring-release", "name":"Spring Enterprise Supported Releases","url":"${{vars.BROADCOM_SPRING_REPOSITORY}}","snapshots":{"enabled":false}}]'
+          pluginRepositories: '[{"id":"tanzu-spring-release", "name":"Spring Enterprise Supported Releases","url":"${{vars.BROADCOM_SPRING_REPOSITORY}}","snapshots":{"enabled":false}}]'
+      - name: Configure Gradle Repos
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/broadcom.gradle << 'EOF'
+            allprojects {
+                repositories {
+                    mavenLocal()
+                    maven {
+                        url = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                        name = "Spring Enterprise Supported Releases"
+                        credentials {
+                            username = System.getenv("BROADCOM_SPRING_USERNAME")
+                            password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                        }
+                    }
+                    mavenCentral()
+                }
+            }
+          
+            settingsEvaluated { settings ->
+                settings.pluginManagement {
+                    repositories {
+                        mavenLocal()
+                        maven {
+                            url = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                            name = "Spring Enterprise Supported Releases"
+                            credentials {
+                                username = System.getenv("BROADCOM_SPRING_USERNAME")
+                                password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                            }
+                        }
+                        mavenCentral()
+                    }
+                }
+            }
+          EOF
+      - name: Build mapping
+        id: build-mapping
+        continue-on-error: true
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
+          CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
+          MAPPING_CONFIG_REPO: ${{ inputs.repo-url }}
+          MAPPING_CONFIG_COORDINATES: ${{ inputs.coordinates }}
+          MAPPING_CONFIG_SLUG: ${{ inputs.mapping-name }}
+          GITHUB_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          cli="advisor"
+          
+          if [ "${{ inputs.runs-on }}" != "self-hosted" ]; then
+            # download the cli
+            echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
+            curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
+            tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
+            cli="/tmp/advisor"
+          fi
+          
+          echo "Running advisor with:"
+          echo "  Git Repo: '$MAPPING_CONFIG_REPO'"
+          echo "  Artifact Coordinates: '$MAPPING_CONFIG_COORDINATES'"
+          echo "  Desired Slug: '$MAPPING_CONFIG_SLUG'"
+          
+          echo $cli mapping build -r "$MAPPING_CONFIG_REPO" --accessToken $GITHUB_APP_TOKEN \
+            ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} \
+            ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"}
+          
+          $cli mapping build -r "$MAPPING_CONFIG_REPO" --accessToken $GITHUB_APP_TOKEN \
+            ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} \
+            ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"}
+
+      - name: Get errors if exist
+        if: always() && hashFiles('.advisor/errors/') != ''
+        run: |
+          cat .advisor/errors/*
+          exit 1
+      - name: fail if error outside advisor
+        if: steps.build-mapping.outcome == 'failure'
+        run: |
+          exit 1
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
+          commit-message: "${{ inputs.mapping-name }} mapping update"
+          title: "${{ inputs.mapping-name }} mapping update"
+          body: "Automatic ${{ inputs.mapping-name }} mapping update"
+          branch: "${{ inputs.mapping-name }}-mapping-update"
+          add-paths: ".advisor/mappings"
