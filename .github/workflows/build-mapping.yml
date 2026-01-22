@@ -41,6 +41,15 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false # Set to true if you DON'T need pre-installed Go/Node/Python
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: true
       - uses: actions/checkout@v4
       - name: Set up JDK
         uses: actions/setup-java@v4
