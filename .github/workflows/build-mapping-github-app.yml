@@ -57,7 +57,7 @@ jobs:
           android: true
           dotnet: true
           haskell: true
-          large-packages: false
+          large-packages: true
           swap-storage: true
       - name: Generate GitHub App Token
         id: app-token
