@@ -31,6 +31,17 @@ on:
         required: false
         type: string
         default: ''
+      debug:
+        description: 'Prints out SAA debug messages'
+        required: false
+        type: boolean
+        default: false
+      offline:
+        description: 'Perform offline mapping - install app tags prior to mapping offline'
+        required: false
+        type: boolean
+        default: false
+
     secrets:
       GH_PULL_REQUEST_TOKEN:
         required: true
@@ -92,13 +103,20 @@ jobs:
             allprojects {
                 repositories {
                     mavenLocal()
-                    maven {
+                    def springRepoUrl = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                    def alreadyExists = repositories.any { repo ->
+                      repo instanceof MavenArtifactRepository && repo.url?.toString() == springRepoUrl
+                    }
+                    
+                    if (!alreadyExists && springRepoUrl) {
+                      maven {
                         url = System.getenv("BROADCOM_SPRING_REPOSITORY")
                         name = "Spring Enterprise Supported Releases"
                         credentials {
                             username = System.getenv("BROADCOM_SPRING_USERNAME")
                             password = System.getenv("BROADCOM_SPRING_PASSWORD")
                         }
+                      }
                     }
                     mavenCentral()
                 }
@@ -108,12 +126,18 @@ jobs:
                 settings.pluginManagement {
                     repositories {
                         mavenLocal()
-                        maven {
-                            url = System.getenv("BROADCOM_SPRING_REPOSITORY")
-                            name = "Spring Enterprise Supported Releases"
-                            credentials {
-                                username = System.getenv("BROADCOM_SPRING_USERNAME")
-                                password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                        def springRepoUrl = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                        def alreadyExists = repositories.any { repo ->
+                            repo instanceof MavenArtifactRepository && repo.url?.toString() == springRepoUrl
+                        }
+                        if (!alreadyExists && springRepoUrl) {
+                            maven {
+                                url = springRepoUrl
+                                name = "Spring Enterprise Supported Releases"
+                                credentials {
+                                    username = System.getenv("BROADCOM_SPRING_USERNAME")
+                                    password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                                }
                             }
                         }
                         mavenCentral()
@@ -121,6 +145,100 @@ jobs:
                 }
             }
           EOF
+      - name: Configure Gradle Publish Plugin if not present
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/maven-publish-init.gradle << 'EOF'
+          allprojects {
+              plugins.withType(JavaPlugin) {
+                  apply plugin: 'maven-publish'
+
+                  afterEvaluate {
+                      if (!publishing.publications.findByName('mavenJava')) {
+                          publishing {
+                              publications {
+                                  mavenJava(MavenPublication) {
+                                      from components.java
+
+                                      // Use project coordinates
+                                      groupId = project.group ?: project.name
+                                      artifactId = project.name
+                                      version = project.version ?: 'unspecified'
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+      - name: Clone and install tagged versions if offline mapping
+        if: inputs.offline == true
+        shell: bash
+        env:
+          REPO_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
+        run: |
+          set -e
+          
+          mkdir -p ignore
+          URL=$(echo "${{ inputs.repo-url }}" | sed 's/https:\/\///')
+          git clone "https://x-access-token:${REPO_TOKEN}@$URL" ignore 
+          
+          cd ignore
+          
+          # Get all semver tags, extract latest patch per major.minor
+          git fetch --tags
+          tags=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | awk -F. '{
+            key = $1 "." $2
+            versions[key] = $0
+          } END {
+            for (k in versions) print versions[k]
+          }' | sort -V)
+
+          if [[ -z "$tags" ]]; then
+            echo "No semver tags found"
+            exit 1
+          fi
+
+          echo "Tags to process:"
+          echo "$tags"
+
+          # Save current ref to return to later
+          original_ref=$(git rev-parse HEAD)
+
+          # Function to detect and run install
+          install_build() {
+            if [[ -f "mvnw" ]]; then
+              chmod +x mvnw
+              ./mvnw install -DskipTests -B
+            elif [[ -f "gradlew" ]]; then
+              chmod +x gradlew
+              ./gradlew publishToMavenLocal -x test
+            elif [[ -f "pom.xml" ]]; then
+              mvn install -DskipTests -B
+            elif [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]]; then
+              gradle publishToMavenLocal -x test
+            else
+              echo "No recognized build system found"
+              return 1
+            fi
+          }
+
+          # Iterate and install each tag
+          for tag in $tags; do
+            echo "========================================="
+            echo "Processing tag: $tag"
+            echo "========================================="
+            git checkout "$tag" --quiet
+            install_build
+          done
+
+          # Return to original ref
+          git checkout "$original_ref" --quiet
+          echo "Done. Returned to original ref."
+          
+          cd ..
+          rm -rf ignore
       - name: Build mapping
         id: build-mapping
         continue-on-error: true
@@ -130,6 +248,8 @@ jobs:
           MAPPING_CONFIG_REPO: ${{ inputs.repo-url }}
           MAPPING_CONFIG_COORDINATES: ${{ inputs.coordinates }}
           MAPPING_CONFIG_SLUG: ${{ inputs.mapping-name }}
+          SAA_DEBUG: ${{ inputs.debug }}
+          SAA_OFFLINE: ${{ inputs.offline }}
         run: |
           cli="advisor"
           
@@ -148,7 +268,9 @@ jobs:
           
           $cli mapping build -r "$MAPPING_CONFIG_REPO" \
             ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} \
-            ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"}
+            ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"} \
+            ${SAA_DEBUG:+--debug} \
+            ${{ inputs.offline && '-o' || '' }}
 
       - name: Get errors if exist
         if: always() && hashFiles('.advisor/errors/') != ''
