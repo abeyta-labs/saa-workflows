@@ -291,6 +291,17 @@ jobs:
             ${SAA_DEBUG:+--debug} \
             ${{ inputs.offline && '-o' || '' }}
 
+          # cleanup token from url
+          FILE_PATH=".advisor/mappings/${MAPPING_CONFIG_SLUG}.json"
+          if [ -f "$FILE_PATH" ]; then
+            jq --arg NEW_URL "$MAPPING_CONFIG_REPO" '.repositoryUrl = $NEW_URL' "$FILE_PATH" > tmp.json
+            mv tmp.json "$FILE_PATH"
+            echo "Successfully updated $FILE_PATH"
+          else
+            echo "Error: File $FILE_PATH not found"
+            exit 1
+          fi
+
       - name: Get errors if exist
         if: always() && hashFiles('.advisor/errors/') != ''
         run: |
