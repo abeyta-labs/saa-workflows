@@ -115,28 +115,41 @@ jobs:
             allprojects {
                 repositories {
                     mavenLocal()
-                    maven {
+                    def springRepoUrl = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                    def alreadyExists = repositories.any { repo ->
+                      repo instanceof MavenArtifactRepository && repo.url?.toString() == springRepoUrl
+                    }
+
+                    if (!alreadyExists && springRepoUrl) {
+                      maven {
                         url = System.getenv("BROADCOM_SPRING_REPOSITORY")
                         name = "Spring Enterprise Supported Releases"
                         credentials {
                             username = System.getenv("BROADCOM_SPRING_USERNAME")
                             password = System.getenv("BROADCOM_SPRING_PASSWORD")
                         }
+                      }
                     }
                     mavenCentral()
                 }
             }
-          
+
             settingsEvaluated { settings ->
                 settings.pluginManagement {
                     repositories {
                         mavenLocal()
-                        maven {
-                            url = System.getenv("BROADCOM_SPRING_REPOSITORY")
-                            name = "Spring Enterprise Supported Releases"
-                            credentials {
-                                username = System.getenv("BROADCOM_SPRING_USERNAME")
-                                password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                        def springRepoUrl = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                        def alreadyExists = repositories.any { repo ->
+                            repo instanceof MavenArtifactRepository && repo.url?.toString() == springRepoUrl
+                        }
+                        if (!alreadyExists && springRepoUrl) {
+                            maven {
+                                url = springRepoUrl
+                                name = "Spring Enterprise Supported Releases"
+                                credentials {
+                                    username = System.getenv("BROADCOM_SPRING_USERNAME")
+                                    password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                                }
                             }
                         }
                         mavenCentral()
