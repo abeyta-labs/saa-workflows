@@ -289,9 +289,7 @@ jobs:
           echo "  Artifact Coordinates: '$MAPPING_CONFIG_COORDINATES'"
           echo "  Desired Slug: '$MAPPING_CONFIG_SLUG'"
           
-          MAPPING_CONFIG_REPO_WITH_AUTH="${MAPPING_CONFIG_REPO/https:\/\//https://x-access-token:${GITHUB_APP_TOKEN}@}"
-          
-          $cli mapping build -r "$MAPPING_CONFIG_REPO_WITH_AUTH" \
+          $cli mapping build -r "$MAPPING_CONFIG_REPO" --accessToken ${GITHUB_APP_TOKEN} \
             ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} \
             ${MAPPING_CONFIG_SLUG:+-s "$MAPPING_CONFIG_SLUG"} \
             ${SAA_DEBUG:+--debug} \
