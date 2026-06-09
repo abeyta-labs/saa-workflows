@@ -268,6 +268,9 @@ jobs:
             echo "token length: ${#ARTIFACTORY_TOKEN}"
             
             curl -fSL \
+              --connect-timeout 15 \
+              --max-time 60 \
+              --retry 2 --retry-delay 10 --retry-all-errors \
               -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
               -o /tmp/advisor-linux.tar \
               -w "HTTP %{http_code}, %{size_download} bytes\n" \
