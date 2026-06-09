@@ -1,0 +1,318 @@
+name: Create Mapping Workflow
+
+on:
+  workflow_call:
+    inputs:
+      mapping-name:
+        description: 'Name of the mapping (e.g., shedlock, spring-boot, etc.)'
+        required: true
+        type: string
+      repo-url:
+        description: 'Url of the repository to map'
+        required: true
+        type: string
+      coordinates:
+        description: 'Artifact coordinates you want to map (e.g., net.javacrumbs.shedlock:shedlock-spring)'
+        required: false
+        type: string
+        default: ''
+      java-version:
+        description: 'Version of java to use'
+        required: false
+        type: string
+        default: '17'
+      runs-on:
+        description: 'Runner type (e.g., ubuntu-latest, self-hosted)'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      after-mapping-script:
+        description: 'path to script to run after the mapping is completed. can be used to cleanup or adjust the mapping prior to opening pr'
+        required: false
+        type: string
+        default: ''
+      debug:
+        description: 'Prints out SAA debug messages'
+        required: false
+        type: boolean
+        default: false
+      offline:
+        description: 'Perform offline mapping - install app tags prior to mapping offline'
+        required: false
+        type: boolean
+        default: false
+      large-disk:
+        description: 'Perform runner disk cleanup prior to mapping. Needed for some large repos'
+        required: false
+        type: boolean
+        default: false
+
+    secrets:
+      GH_PULL_REQUEST_TOKEN:
+        required: true
+      BROADCOM_SPRING_USERNAME:
+        required: true
+      BROADCOM_SPRING_PASSWORD:
+        required: true
+jobs:
+  mapping:
+    timeout-minutes: 900
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        if: inputs.large-disk == true
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false # Set to true if you DON'T need pre-installed Go/Node/Python
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+      - uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: 'liberica'
+      - name: Cache Maven
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository
+          key: org-maven-${{ runner.os }}-v2
+          restore-keys: org-maven-${{ runner.os }}-v2
+      - name: Cache Gradle
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: org-gradle-${{ runner.os }}-v2
+          restore-keys: org-gradle-${{ runner.os }}-v2
+      - name: Configure Maven Settings
+        uses: 's4u/maven-settings-action@v4.0.0'
+        with:
+          servers: '[{"id": "tanzu-spring-release", "username":  "${{ secrets.BROADCOM_SPRING_USERNAME }}", "password": "${{ secrets.BROADCOM_SPRING_PASSWORD }}"}]'
+          repositories: '[{"id":"tanzu-spring-release", "name":"Spring Enterprise Supported Releases","url":"${{vars.BROADCOM_SPRING_REPOSITORY}}","snapshots":{"enabled":false}}]'
+          pluginRepositories: '[{"id":"tanzu-spring-release", "name":"Spring Enterprise Supported Releases","url":"${{vars.BROADCOM_SPRING_REPOSITORY}}","snapshots":{"enabled":false}}]'
+      - name: Configure Gradle Repos
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/broadcom.gradle << 'EOF'
+            allprojects {
+                repositories {
+                    mavenLocal()
+                    def springRepoUrl = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                    def alreadyExists = repositories.any { repo ->
+                      repo instanceof MavenArtifactRepository && repo.url?.toString() == springRepoUrl
+                    }
+                    
+                    if (!alreadyExists && springRepoUrl) {
+                      maven {
+                        url = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                        name = "Spring Enterprise Supported Releases"
+                        credentials {
+                            username = System.getenv("BROADCOM_SPRING_USERNAME")
+                            password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                        }
+                      }
+                    }
+                    mavenCentral()
+                }
+            }
+          
+            settingsEvaluated { settings ->
+                settings.pluginManagement {
+                    repositories {
+                        mavenLocal()
+                        def springRepoUrl = System.getenv("BROADCOM_SPRING_REPOSITORY")
+                        def alreadyExists = repositories.any { repo ->
+                            repo instanceof MavenArtifactRepository && repo.url?.toString() == springRepoUrl
+                        }
+                        if (!alreadyExists && springRepoUrl) {
+                            maven {
+                                url = springRepoUrl
+                                name = "Spring Enterprise Supported Releases"
+                                credentials {
+                                    username = System.getenv("BROADCOM_SPRING_USERNAME")
+                                    password = System.getenv("BROADCOM_SPRING_PASSWORD")
+                                }
+                            }
+                        }
+                        mavenCentral()
+                    }
+                }
+            }
+          EOF
+      - name: Configure Gradle Publish Plugin if not present
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/maven-publish-init.gradle << 'EOF'
+          allprojects {
+              plugins.withType(JavaPlugin) {
+                  apply plugin: 'maven-publish'
+
+                  afterEvaluate {
+                      if (!publishing.publications.findByName('mavenJava')) {
+                          publishing {
+                              publications {
+                                  mavenJava(MavenPublication) {
+                                      from components.java
+
+                                      // Use project coordinates
+                                      groupId = project.group ?: project.name
+                                      artifactId = project.name
+                                      version = project.version ?: 'unspecified'
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+      - name: Clone repo
+        shell: bash
+        env:
+          REPO_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
+        run: |
+          set -e
+          
+          mkdir -p ignore
+          URL=$(echo "${{ inputs.repo-url }}" | sed 's/https:\/\///')
+          git clone "https://x-access-token:${REPO_TOKEN}@$URL" ignore 
+          
+      - name: Install tagged versions if offline mapping
+        if: inputs.offline == true
+        shell: bash
+        run: |
+          set -e
+          
+          cd ignore
+          
+          # Get all semver tags, extract latest patch per major.minor
+          git fetch --tags
+          tags=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | awk -F. '{
+            key = $1 "." $2
+            versions[key] = $0
+          } END {
+            for (k in versions) print versions[k]
+          }' | sort -V)
+
+          if [[ -z "$tags" ]]; then
+            echo "No semver tags found"
+            exit 1
+          fi
+
+          echo "Tags to process:"
+          echo "$tags"
+
+          # Save current ref to return to later
+          original_ref=$(git rev-parse HEAD)
+
+          # Function to detect and run install
+          install_build() {
+            if [[ -f "mvnw" ]]; then
+              chmod +x mvnw
+              ./mvnw install -DskipTests -B
+            elif [[ -f "gradlew" ]]; then
+              chmod +x gradlew
+              ./gradlew publishToMavenLocal -x test
+            elif [[ -f "pom.xml" ]]; then
+              mvn install -DskipTests -B
+            elif [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]]; then
+              gradle publishToMavenLocal -x test
+            else
+              echo "No recognized build system found"
+              return 1
+            fi
+          }
+
+          # Iterate and install each tag
+          for tag in $tags; do
+            echo "========================================="
+            echo "Processing tag: $tag"
+            echo "========================================="
+            git checkout "$tag" --quiet
+            install_build
+          done
+
+          # Return to original ref
+          git checkout "$original_ref" --quiet
+          echo "Done. Returned to original ref."
+          
+      - name: Create mapping
+        id: create-mapping
+        continue-on-error: true
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
+          CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
+          MAPPING_CONFIG_REPO: ${{ inputs.repo-url }}
+          MAPPING_CONFIG_COORDINATES: ${{ inputs.coordinates }}
+          SAA_DEBUG: ${{ inputs.debug }}
+        run: |
+          cli="advisor"
+          
+          if [ "${{ inputs.runs-on }}" != "self-hosted" ]; then
+            # download the cli
+            echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
+            curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
+            tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
+            cli="/tmp/advisor"
+          fi
+          
+          echo "Running advisor with:"
+          echo "  Git Repo: '$MAPPING_CONFIG_REPO'"
+          echo "  Artifact Coordinates: '$MAPPING_CONFIG_COORDINATES'"
+          
+          cd ignore
+          
+          $cli mapping create ${MAPPING_CONFIG_COORDINATES:+-c "$MAPPING_CONFIG_COORDINATES"} ${SAA_DEBUG:+--debug}
+          
+          mv .advisor/mappings/* ../.advisor/mappings
+
+      - name: Get errors if exist
+        if: always() && hashFiles('.advisor/errors/') != ''
+        run: |
+          cat .advisor/errors/*
+          exit 1
+      - name: fail if error outside advisor
+        if: steps.create-mapping.outcome == 'failure'
+        run: |
+          exit 1
+      - name: execute after mapping script
+        if: ${{ inputs.after-mapping-script != '' }}
+        shell: bash
+        run: |
+          SCRIPT_PATH="${{ inputs.after-mapping-script }}"
+          case "$SCRIPT_PATH" in
+            *.py)
+              echo "Detected Python script. Running with python3..."
+              python3 "$SCRIPT_PATH"
+              ;;
+            *.sh)
+              echo "Detected Shell script. Running with bash..."
+              chmod +x "$SCRIPT_PATH"
+              bash "$SCRIPT_PATH"
+              ;;
+            *)
+              echo "::error::Unsupported file extension for script: $SCRIPT_PATH"
+              exit 1
+              ;;
+          esac
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
+          commit-message: "${{ inputs.mapping-name }} mapping update"
+          title: "${{ inputs.mapping-name }} mapping update"
+          body: "Automatic ${{ inputs.mapping-name }} mapping update"
+          branch: "${{ inputs.mapping-name }}-mapping-update"
+          add-paths: ".advisor/mappings"
