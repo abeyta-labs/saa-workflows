@@ -168,6 +168,7 @@ jobs:
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH: ".advisor/mappings/"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH: "main"
+          SPRING_ADVISOR_MAPPING_CUSTOM_0_MERGE_STRATEGY: "override"
         run: |
           # download the cli
           echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
