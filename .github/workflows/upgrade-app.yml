@@ -58,6 +58,21 @@ on:
         required: false
         type: string
         default: "10"
+      upgrade-mode:
+        description: 'Mode for advisor. Valid values are "upgrade" or "patch". Upgrade will work to upgrade your application to the next major/minor available. Patch will maintain your current major.minor and only bump to the latest patches.'
+        default: "upgrade"
+        required: false
+        type: string
+      saa-scm-host:
+        description: 'Trusted hostname for self-hosted GitLab or GitHub instances. Required when using --push with any host other than github.com or gitlab.com. (default: $ADVISOR_SCM_HOST)'
+        required: false
+        type: string
+      saa-branch-prefix:
+        description: 'Prefix to use for the branch name created for the upgrade'
+        required: false
+        type: string
+        default: ""
+
     secrets:
       GH_PULL_REQUEST_TOKEN:
         required: true
@@ -157,7 +172,7 @@ jobs:
                 }
             }
           EOF
-      - name: Runs Spring Application Advisor
+      - name: Run Spring Application Advisor
         continue-on-error: true
         env:
           GIT_TOKEN_FOR_PRS: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
@@ -169,12 +184,39 @@ jobs:
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH: ".advisor/mappings/"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_BRANCH: "main"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_MERGE_STRATEGY: "override"
+          BRANCH_PREFIX_FOR_UPGRADE: ${{ inputs.saa-branch-prefix }}
         run: |
           # download the cli
           echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
           curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
           tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
-          
+
+          if [[ "${{ inputs.upgrade-mode }}" == "patch" ]]; then
+            echo "Running advisor in patch mode"
+
+            # build the patch apply command based on inputs
+            PATCH_APPLY_CMD=()
+            PATCH_APPLY_CMD+=("/tmp/advisor")
+            PATCH_APPLY_CMD+=("patch")
+            PATCH_APPLY_CMD+=("apply")
+            [[ "${{ inputs.saa-debug }}" == "true" ]] && PATCH_APPLY_CMD+=("--debug")
+            [[ -n "${{ inputs.saa-build-tool }}" ]] && PATCH_APPLY_CMD+=("--build-tool" "${{ inputs.saa-build-tool }}")
+            [[ -n "${{ inputs.saa-build-tool-options }}" ]] && PATCH_APPLY_CMD+=("--build-tool-options" "${{ inputs.saa-build-tool-options }}")
+            [[ -n "${{ inputs.saa-build-tool-jvm-args }}" ]] && PATCH_APPLY_CMD+=("--build-tool-jvm-args" "${{ inputs.saa-build-tool-jvm-args }}")
+            [[ -n "${{ inputs.saa-path }}" ]] && PATCH_APPLY_CMD+=("--path" "${{ inputs.saa-path }}")
+            [[ -n "${{ inputs.saa-scm-host }}" ]] && PATCH_APPLY_CMD+=("--scm-host" "${{ inputs.saa-scm-host }}")
+            [[ "${{ inputs.saa-create-pr }}" == "true" ]] && PATCH_APPLY_CMD+=("--push")
+
+            echo "Running patch apply"
+            echo "${PATCH_APPLY_CMD[@]}"
+            "${PATCH_APPLY_CMD[@]}"
+
+            # clean up
+            rm /tmp/advisor-linux.tar
+            rm /tmp/advisor
+            exit 0
+          fi
+
           echo "Running advisor with mapping configuration:"
           echo "  Mapping Git Repo: $SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_URI"
           echo "  Mapping Git Path: $SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH"
