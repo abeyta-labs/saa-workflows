@@ -83,12 +83,14 @@ jobs:
           java-version: ${{ inputs.java-version }}
           distribution: 'liberica'
       - name: Cache Maven
+        if: inputs.runs-on != 'self-hosted' && inputs.runs-on != 'java'
         uses: actions/cache@v5
         with:
           path: ~/.m2/repository
           key: org-maven-${{ runner.os }}-v2
           restore-keys: org-maven-${{ runner.os }}-v2
       - name: Cache Gradle
+        if: inputs.runs-on != 'self-hosted' && inputs.runs-on != 'java'
         uses: actions/cache@v5
         with:
           path: |
