@@ -103,20 +103,37 @@ jobs:
         with:
           java-version: ${{ inputs.java-version }}
           distribution: 'liberica'
+      # Job-scope everything Gradle. On a persistent/self-hosted runner a shared
+      # ~/.gradle leaks the init.d repo config written below into every other repo
+      # that builds on the box — the pluginManagement override removes the default
+      # Gradle Plugin Portal, which broke a sibling repo's CI (2026-07-14).
+      # RUNNER_TEMP is wiped between jobs, so init scripts, caches, and wrapper
+      # dists all stay job-local. mavenLocal() still resolves to the shared
+      # ~/.m2/repository, so the Maven<->Gradle install/consume handoff is unchanged.
+      - name: Isolate Gradle home (self-hosted-safe)
+        run: |
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-home" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/gradle-home/init.d"
       - name: Cache Maven
         uses: actions/cache@v5
         with:
           path: ~/.m2/repository
           key: org-maven-${{ runner.os }}-v1
           restore-keys: org-maven-${{ runner.os }}-
+      # Key bumped v1->v2 and restore-keys made EXACT: actions/cache archives absolute
+      # paths, so a pre-isolation archive (which the old prefix restore-key would happily
+      # match) would restore into ~/.gradle and re-pollute the shared home.
       - name: Cache Gradle
         uses: actions/cache@v5
         with:
           path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: org-gradle-${{ runner.os }}-v1
-          restore-keys: org-gradle-${{ runner.os }}-
+            ${{ runner.temp }}/gradle-home/caches
+            ${{ runner.temp }}/gradle-home/wrapper
+          key: org-gradle-${{ runner.os }}-v2
+          restore-keys: org-gradle-${{ runner.os }}-v2
+      # Maven config is already shared-home-tolerable: s4u/maven-settings-action backs
+      # up ~/.m2/settings.xml and restores it in its post step (residual: a hard-killed
+      # job leaves the credentialed settings.xml behind on a shared runner).
       - name: Generates Maven Settings
         uses: 's4u/maven-settings-action@v4.0.0'
         with:
@@ -125,8 +142,8 @@ jobs:
           pluginRepositories: '[{"id":"tanzu-spring-release", "name":"Spring Enterprise Supported Releases","url":"${{vars.BROADCOM_SPRING_REPOSITORY}}","snapshots":{"enabled":false}}]'
       - name: Configure Gradle Repos
         run: |
-          mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/broadcom.gradle << 'EOF'
+          mkdir -p "$GRADLE_USER_HOME/init.d"
+          cat > "$GRADLE_USER_HOME/init.d/broadcom.gradle" << 'EOF'
             allprojects {
                 repositories {
                     mavenLocal()
