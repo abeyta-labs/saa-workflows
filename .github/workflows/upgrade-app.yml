@@ -185,6 +185,13 @@ jobs:
                             }
                         }
                         mavenCentral()
+                        // Restore Gradle's default plugin source: overriding pluginManagement
+                        // repositories REPLACES the implicit Plugin Portal, and many plugin
+                        // MARKERS (com.diffplug.spotless, org.gradle.toolchains.foojay-resolver-
+                        // convention, ...) exist only there — without this, any Gradle project
+                        // using a portal-only plugin fails dependency resolution (boostertickets,
+                        // 2026-08-04).
+                        gradlePluginPortal()
                     }
                 }
             }
@@ -379,8 +386,12 @@ jobs:
           # clean up
           rm /tmp/advisor-linux.tar
           rm /tmp/advisor
+      # hashFiles takes FILE globs — the old '.advisor/errors/' (a bare directory
+      # path) matched nothing, so advisor failures rode continue-on-error to a green
+      # run (boostertickets 2026-08-04: dependency resolution failed, job succeeded).
+      # The '**/' variant also catches errors written under a saa-path subdirectory.
       - name: Get errors if exist
-        if: always() && hashFiles('.advisor/errors/') != ''
+        if: always() && hashFiles('.advisor/errors/**', '**/.advisor/errors/**') != ''
         run: |
-          cat .advisor/errors/*
+          find . -path '*/.advisor/errors/*' -type f -print -exec cat {} \;
           exit 1
