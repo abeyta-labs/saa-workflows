@@ -212,15 +212,21 @@ jobs:
         run: |
           # download the cli
           echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
-          curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
-          tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
+
+          # Unique per-run dir so concurrent upgrade jobs on a shared/self-hosted
+          # host don't clobber each other's download/extraction under /tmp.
+          ADVISOR_TMP_DIR="$(mktemp -d)"
+          echo "Using temp dir: $ADVISOR_TMP_DIR"
+
+          curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o "$ADVISOR_TMP_DIR/advisor-linux.tar" -X GET $CLI_DOWNLOAD_URL
+          tar -xf "$ADVISOR_TMP_DIR/advisor-linux.tar" -C "$ADVISOR_TMP_DIR" --strip-components=1 --exclude=./META-INF
 
           if [[ "${{ inputs.upgrade-mode }}" == "patch" ]]; then
             echo "Running advisor in patch mode"
 
             # build the patch apply command based on inputs
             PATCH_APPLY_CMD=()
-            PATCH_APPLY_CMD+=("/tmp/advisor")
+            PATCH_APPLY_CMD+=("$ADVISOR_TMP_DIR/advisor")
             PATCH_APPLY_CMD+=("patch")
             PATCH_APPLY_CMD+=("apply")
             [[ "${{ inputs.saa-debug }}" == "true" ]] && PATCH_APPLY_CMD+=("--debug")
@@ -236,8 +242,7 @@ jobs:
             "${PATCH_APPLY_CMD[@]}"
 
             # clean up
-            rm /tmp/advisor-linux.tar
-            rm /tmp/advisor
+            rm -rf "$ADVISOR_TMP_DIR"
             exit 0
           fi
 
@@ -248,7 +253,7 @@ jobs:
           
           # build the build-config get command based on inputs
           BUILD_CONFIG_CMD=()
-          BUILD_CONFIG_CMD+=("/tmp/advisor")
+          BUILD_CONFIG_CMD+=("$ADVISOR_TMP_DIR/advisor")
           BUILD_CONFIG_CMD+=("build-config")
           BUILD_CONFIG_CMD+=("get")
           [[ "${{ inputs.saa-debug }}" == "true" ]] && BUILD_CONFIG_CMD+=("--debug")
@@ -268,7 +273,7 @@ jobs:
           
           # build the upgrade-plan get command based on inputs
           UPGRADE_PLAN_GET_CMD=()
-          UPGRADE_PLAN_GET_CMD+=("/tmp/advisor")
+          UPGRADE_PLAN_GET_CMD+=("$ADVISOR_TMP_DIR/advisor")
           UPGRADE_PLAN_GET_CMD+=("upgrade-plan")
           UPGRADE_PLAN_GET_CMD+=("get")
           [[ "${{ inputs.saa-debug }}" == "true" ]] && UPGRADE_PLAN_GET_CMD+=("--debug")
@@ -300,7 +305,7 @@ jobs:
             # run the upgrade, create a branch to hold the change, commit the change in the branch, create a PR for the branch into main
             # build the upgrade-plan apply command based on inputs
             UPGRADE_PLAN_APPLY_CMD=()
-            UPGRADE_PLAN_APPLY_CMD+=("/tmp/advisor")
+            UPGRADE_PLAN_APPLY_CMD+=("$ADVISOR_TMP_DIR/advisor")
             UPGRADE_PLAN_APPLY_CMD+=("upgrade-plan")
             UPGRADE_PLAN_APPLY_CMD+=("apply")
             [[ "${{ inputs.saa-debug }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--debug")
@@ -384,8 +389,7 @@ jobs:
           fi
           
           # clean up
-          rm /tmp/advisor-linux.tar
-          rm /tmp/advisor
+          rm -rf "$ADVISOR_TMP_DIR"
       # hashFiles takes FILE globs — the old '.advisor/errors/' (a bare directory
       # path) matched nothing, so advisor failures rode continue-on-error to a green
       # run (boostertickets 2026-08-04: dependency resolution failed, job succeeded).
