@@ -1,0 +1,67 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Which part of the latest tag to bump'
+        required: true
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Determine next tag
+        id: bump
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          latest_tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)
+
+          if [[ -z "$latest_tag" ]]; then
+            echo "No existing semver tags found, starting from v0.0.0"
+            latest_tag="v0.0.0"
+          fi
+          echo "Latest tag: $latest_tag"
+
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          case "${{ inputs.bump }}" in
+            major)
+              major=$((major + 1)); minor=0; patch=0
+              ;;
+            minor)
+              minor=$((minor + 1)); patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          new_tag="v${major}.${minor}.${patch}"
+          echo "New tag: $new_tag"
+          echo "new-tag=$new_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.bump.outputs.new-tag }}" -m "Release ${{ steps.bump.outputs.new-tag }}" HEAD
+          git push origin "${{ steps.bump.outputs.new-tag }}"
