@@ -283,21 +283,26 @@ jobs:
           if [ "${{ inputs.runs-on }}" != "self-hosted" ]; then
             # download the cli
             echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
-            
+
             if [ -z "$ARTIFACTORY_TOKEN" ]; then echo "TOKEN IS EMPTY"; fi
             echo "token length: ${#ARTIFACTORY_TOKEN}"
-            
+
+            # Unique per-run dir so concurrent mapping jobs on a shared/self-hosted
+            # host don't clobber each other's download/extraction under /tmp.
+            ADVISOR_TMP_DIR="$(mktemp -d)"
+            echo "Using temp dir: $ADVISOR_TMP_DIR"
+
             curl -fSL \
               --connect-timeout 15 \
               --max-time 60 \
               --retry 2 --retry-delay 10 --retry-all-errors \
               -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
-              -o /tmp/advisor-linux.tar \
+              -o "$ADVISOR_TMP_DIR/advisor-linux.tar" \
               -w "HTTP %{http_code}, %{size_download} bytes\n" \
               "$CLI_DOWNLOAD_URL"
-          
-            tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
-            cli="/tmp/advisor"
+
+            tar -xf "$ADVISOR_TMP_DIR/advisor-linux.tar" -C "$ADVISOR_TMP_DIR" --strip-components=1 --exclude=./META-INF
+            cli="$ADVISOR_TMP_DIR/advisor"
           fi
           
           echo "Running advisor with:"
