@@ -26,6 +26,11 @@ on:
         required: false
         type: string
         default: "java"
+      before-mapping-script:
+        description: 'path to script to run after the target repo is cloned but before the mapping runs. can be used to adjust the cloned workspace so advisor can work on repos that fail as-cloned. runs with the clone as its working directory (also exported as MAPPING_WORKSPACE)'
+        required: false
+        type: string
+        default: ''
       after-mapping-script:
         description: 'path to script to run after the mapping is completed. can be used to cleanup or adjust the mapping prior to opening pr'
         required: false
@@ -207,8 +212,49 @@ jobs:
           
           mkdir -p ignore
           URL=$(echo "${{ inputs.repo-url }}" | sed 's/https:\/\///')
-          git clone "https://x-access-token:${REPO_TOKEN}@$URL" ignore 
-          
+          git clone "https://x-access-token:${REPO_TOKEN}@$URL" ignore
+
+      # Runs against the freshly cloned target repo, before anything builds it --
+      # some repos can't be mapped as-cloned (e.g. a Maven wrapper with no
+      # .mvn/wrapper/maven-wrapper.properties, which every ./mvnw-preferring step
+      # below would then fail on). Deliberately placed ahead of the offline tag
+      # install so both that and the mapping see the same fixed-up workspace.
+      - name: execute before mapping script
+        if: ${{ inputs.before-mapping-script != '' }}
+        shell: bash
+        env:
+          MAPPING_WORKSPACE: ${{ github.workspace }}/ignore
+        run: |
+          set -e
+
+          # The script lives in the calling repo's checkout, but operates on the
+          # clone -- so resolve it against GITHUB_WORKSPACE and run it from the
+          # clone, letting a script treat "." as the repo root it's fixing up.
+          SCRIPT_PATH="$GITHUB_WORKSPACE/${{ inputs.before-mapping-script }}"
+
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "::error::before-mapping-script not found: $SCRIPT_PATH"
+            exit 1
+          fi
+
+          cd "$MAPPING_WORKSPACE"
+
+          case "$SCRIPT_PATH" in
+            *.py)
+              echo "Detected Python script. Running with python3..."
+              python3 "$SCRIPT_PATH"
+              ;;
+            *.sh)
+              echo "Detected Shell script. Running with bash..."
+              chmod +x "$SCRIPT_PATH"
+              bash "$SCRIPT_PATH"
+              ;;
+            *)
+              echo "::error::Unsupported file extension for script: $SCRIPT_PATH"
+              exit 1
+              ;;
+          esac
+
       - name: Install tagged versions if offline mapping
         if: inputs.offline == true
         shell: bash
