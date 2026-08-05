@@ -372,9 +372,9 @@ jobs:
 
             if [[ "$MANUAL_PR" == "true" ]]; then
               upgraded=$(sed -n '/Projects to upgrade:/,/^$/p' upgrade-plan-apply-output.txt | grep -E $'^\t\\* ' | sed $'s/^\t\\* //' | paste -sd, -)
-              # advisor working files are disposable after a successful apply and
-              # must not ride the PR
-              find . -type d -name '.advisor' -prune -exec rm -rf {} +
+              # advisor working files must not ride the PR; keep build/.advisor —
+              # it holds the input-hash cache (1.6.x), build/ is gitignored anyway
+              find . -type d -name '.advisor' -not -path '*/build/*' -prune -exec rm -rf {} +
               rm -f upgrade-plan-apply-output.txt
               if [[ -z "$(git status --porcelain)" ]]; then
                 echo "Advisor applied no changes; skipping PR."
