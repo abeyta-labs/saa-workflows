@@ -346,12 +346,51 @@ jobs:
             [[ -n "${{ inputs.saa-build-tool-jvm-args }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--build-tool-jvm-args" "${{ inputs.saa-build-tool-jvm-args }}")
             [[ -n "${{ inputs.saa-squash }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--squash" "${{ inputs.saa-squash }}")
             [[ -n "${{ inputs.saa-after-upgrade-command }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--after-upgrade-cmd" "${{ inputs.saa-after-upgrade-command }}")
-            [[ "${{ inputs.saa-create-pr }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--push")
-            [[ "${{ inputs.saa-create-pr }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--token=$GIT_TOKEN_FOR_PRS")
-          
+
+            # Advisor --push jgit-opens saa-path as the git repo, so in a monorepo
+            # (saa-path pointing below the repo root) PR creation dies with
+            # "RepositoryNotFoundException: repository not found: .../backend" —
+            # jgit does not walk up to the enclosing repository. Apply without
+            # --push there and create the branch/commit/PR ourselves.
+            MANUAL_PR=false
+            if [[ "${{ inputs.saa-create-pr }}" == "true" ]]; then
+              if [[ -n "${{ inputs.saa-path }}" && "${{ inputs.saa-path }}" != "." ]]; then
+                MANUAL_PR=true
+              else
+                UPGRADE_PLAN_APPLY_CMD+=("--push")
+                UPGRADE_PLAN_APPLY_CMD+=("--token=$GIT_TOKEN_FOR_PRS")
+              fi
+            fi
+
             echo "Running upgrade-plan apply"
             echo "${UPGRADE_PLAN_APPLY_CMD[@]}"
-            "${UPGRADE_PLAN_APPLY_CMD[@]}"
+            # pipefail scoped to the tee: without it a failed apply reads as
+            # success and we would open a PR from a half-applied tree
+            set -o pipefail
+            "${UPGRADE_PLAN_APPLY_CMD[@]}" 2>&1 | tee upgrade-plan-apply-output.txt
+            set +o pipefail
+
+            if [[ "$MANUAL_PR" == "true" ]]; then
+              upgraded=$(sed -n '/Projects to upgrade:/,/^$/p' upgrade-plan-apply-output.txt | grep -E $'^\t\\* ' | sed $'s/^\t\\* //' | paste -sd, -)
+              # advisor working files are disposable after a successful apply and
+              # must not ride the PR
+              find . -type d -name '.advisor' -prune -exec rm -rf {} +
+              rm -f upgrade-plan-apply-output.txt
+              if [[ -z "$(git status --porcelain)" ]]; then
+                echo "Advisor applied no changes; skipping PR."
+              else
+                branch_name="${BRANCH_PREFIX_FOR_UPGRADE:+${BRANCH_PREFIX_FOR_UPGRADE}-}upgrade-plan-$(date +%Y%m%d-%H%M%S)"
+                pr_title="[Auto] Spring upgrade: ${upgraded:-advisor upgrade-plan step}"
+                git checkout -b "$branch_name"
+                git add -A
+                git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" commit -m "$pr_title"
+                # the checkout's persisted credentials are read-only (permissions:
+                # contents: read) — push through gh's credential helper, which uses
+                # GH_TOKEN (the PR token), and neutralize the checkout extraheader
+                git -c credential.helper='!gh auth git-credential' -c http.https://github.com/.extraheader= push -u origin "$branch_name"
+                gh pr create --title "$pr_title" --body "$(printf 'Automated Spring Application Advisor upgrade-plan step.\n\nProjects upgraded: %s\n' "${upgraded:-see diff}")" --head "$branch_name"
+              fi
+            fi
           else
             # Get current Spring Boot version before upgrade
             old_version=$(./mvnw help:evaluate -Dexpression=project.parent.version -q -DforceStdout 2>/dev/null || echo "unknown")
