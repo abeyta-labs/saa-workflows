@@ -124,14 +124,20 @@ jobs:
       # Key bumped v1->v2 and restore-keys made EXACT: actions/cache archives absolute
       # paths, so a pre-isolation archive (which the old prefix restore-key would happily
       # match) would restore into ~/.gradle and re-pollute the shared home.
+      # v2->v3 (2026-08-05): the v2 archive was saved while repo config was broken
+      # (pre-gradlePluginPortal fix) and carried Gradle NEGATIVE-resolution entries —
+      # "com.vmware.tanzu.spring.recipes:rewrite-static-analysis:1.7.2 missing" was
+      # replayed from cache on every later run (exact-key hits never re-save), failing
+      # upgrade-plan apply without a single live request to the Broadcom repo. The
+      # job now fails on advisor errors, so a broken run can no longer save its cache.
       - name: Cache Gradle
         uses: actions/cache@v5
         with:
           path: |
             ${{ runner.temp }}/gradle-home/caches
             ${{ runner.temp }}/gradle-home/wrapper
-          key: org-gradle-${{ runner.os }}-v2
-          restore-keys: org-gradle-${{ runner.os }}-v2
+          key: org-gradle-${{ runner.os }}-v3
+          restore-keys: org-gradle-${{ runner.os }}-v3
       # Maven config is already shared-home-tolerable: s4u/maven-settings-action backs
       # up ~/.m2/settings.xml and restores it in its post step (residual: a hard-killed
       # job leaves the credentialed settings.xml behind on a shared runner).
