@@ -210,6 +210,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
           CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
+          # The broadcom.gradle init script reads these at GRADLE runtime and
+          # silently drops the Broadcom repo when they're unset — which is exactly
+          # what happened to every gradle-project advisor run before 2026-08-05:
+          # commercial recipe TRANSITIVES (rewrite-static-analysis) could then only
+          # come from mavenLocal or Central, and upgrade-plan apply failed with
+          # "Could not find com.vmware.tanzu.spring.recipes:rewrite-static-analysis".
+          # Maven projects never noticed because settings.xml carries the creds.
+          BROADCOM_SPRING_REPOSITORY: ${{ vars.BROADCOM_SPRING_REPOSITORY }}
+          BROADCOM_SPRING_USERNAME: ${{ secrets.BROADCOM_SPRING_USERNAME }}
+          BROADCOM_SPRING_PASSWORD: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_URI: "https://github.com/abeyta-labs/saa-mappings.git"
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           SPRING_ADVISOR_MAPPING_CUSTOM_0_GIT_PATH: ".advisor/mappings/"
