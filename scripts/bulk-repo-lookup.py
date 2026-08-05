@@ -4,12 +4,13 @@ Maven Repository Lookup Tool
 Resolves source repository URLs for Maven artifacts from an input file.
 """
 
+import re
 import sys
 import json
 import csv
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import argparse
@@ -31,6 +32,20 @@ def resolve_artifact(artifact: str, resolver_script: str = "./get-repo-url.py") 
         }
 
     group_id, artifact_id = parts
+
+    # Advisor output sometimes includes non-artifact lines that survive the
+    # workflow-side extraction (status text, warnings). Real coordinates never
+    # contain whitespace — fail them fast instead of querying Maven Central.
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', group_id) or not re.fullmatch(r'[A-Za-z0-9_.-]+', artifact_id):
+        return {
+            'artifact': artifact,
+            'group_id': group_id,
+            'artifact_id': artifact_id,
+            'resolved': False,
+            'repository_url': '',
+            'error': 'Not a Maven coordinate (likely a non-artifact line from advisor output)',
+            'response_time_ms': 0
+        }
 
     start_time = time.time()
     try:
@@ -127,7 +142,7 @@ def resolve_parallel(artifacts: List[str], resolver_script: str, max_workers: in
 def output_json(results: List[Dict], input_file: str, output_file: Optional[str] = None):
     """Output results in JSON format."""
     output = {
-        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         'input_file': input_file,
         'artifacts': results,
         'summary': {
@@ -169,7 +184,7 @@ def output_markdown(results: List[Dict], input_file: str):
     """Output results in Markdown format."""
     print("# Maven Artifact Repository URLs")
     print(f"\n**Input File:** `{input_file}`")
-    print(f"**Timestamp:** {datetime.utcnow().isoformat()}Z")
+    print(f"**Timestamp:** {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
     print("\n| Artifact | Status | Repository URL | Response Time |")
     print("|----------|--------|----------------|---------------|")
 
