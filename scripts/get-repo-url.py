@@ -124,22 +124,26 @@ def get_repo_url(group_id, artifact_id, max_depth=10):
                 if '}' in elem.tag:
                     elem.tag = elem.tag.split('}')[1]
 
-            # Check for SCM section
-            scm = root.find('.//scm')
+            # Check for SCM section (direct child only — './/scm' could match
+            # scm blocks nested under profiles or plugin config)
+            scm = root.find('scm')
             if scm is not None:
-                # Try different SCM fields
+                # Try different SCM fields. Skip unresolved Maven property
+                # placeholders (e.g. flyway-core ships literal
+                # "${scm.developerConnection}") — keep traversing instead.
                 for field in ['developerConnection', 'url', 'connection']:
                     elem = scm.find(field)
-                    if elem is not None and elem.text:
+                    if elem is not None and elem.text and '${' not in elem.text:
                         cleaned_url = clean_scm_url(elem.text)
                         if cleaned_url:
                             if '--verbose' in sys.argv:
                                 print(f"Found SCM URL in {field}: {cleaned_url}", file=sys.stderr)
                             return cleaned_url
 
-            # Check project URL as fallback
-            url_elem = root.find('.//url')
-            if url_elem is not None and url_elem.text:
+            # Check project URL as fallback (direct child only — './/url' matches
+            # the first <url> anywhere, e.g. a license or developer URL)
+            url_elem = root.find('url')
+            if url_elem is not None and url_elem.text and '${' not in url_elem.text:
                 url = url_elem.text.strip()
                 # Check if it's a repo URL
                 if any(host in url for host in ['github.com', 'gitlab.com', 'bitbucket.org', 'sourceforge.net']):
@@ -148,6 +152,7 @@ def get_repo_url(group_id, artifact_id, max_depth=10):
                     return url
 
             # Continue to parent if exists
+            parent = root.find('parent')
             if parent is not None:
                 parent_group = parent.find('groupId')
                 parent_artifact = parent.find('artifactId')
@@ -161,7 +166,7 @@ def get_repo_url(group_id, artifact_id, max_depth=10):
 
                     return None
 
-                    # Check if the parent is the Apache root POM
+                # Check if the parent is the Apache root POM
                 if (parent_group is not None and parent_group.text == 'org.apache' and
                         parent_artifact is not None and parent_artifact.text == 'apache'):
 
@@ -213,6 +218,14 @@ def main():
         sys.exit(1)
 
     group_id, artifact_id = sys.argv[1].split(':', 1)
+
+    # Advisor output can hand us non-artifact lines ("shedlock: 7.7.x (no
+    # upgrades available)", warning text). Real Maven coordinates never contain
+    # whitespace — reject anything else before building URLs from it.
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', group_id) or not re.fullmatch(r'[A-Za-z0-9_.-]+', artifact_id):
+        print(f"Not a Maven coordinate: '{sys.argv[1]}' (expected groupId:artifactId)", file=sys.stderr)
+        sys.exit(1)
+
     repo_url = get_repo_url(group_id, artifact_id)
 
     if repo_url:

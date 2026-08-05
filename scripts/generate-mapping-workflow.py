@@ -2,6 +2,7 @@
 """
 Script to trigger GitHub workflows based on resolved artifacts from artifact-details.json
 """
+import argparse
 import json
 import os
 import subprocess
@@ -165,8 +166,6 @@ def format_artifact_info(artifact: Dict) -> str:
 
 def main():
     """Main execution function."""
-    import argparse
-
     parser = argparse.ArgumentParser(description="Trigger workflows for resolved artifacts")
     parser.add_argument("--file", default="artifact-details.json",
                         help="Path to artifact-details.json (default: artifact-details.json)")
@@ -355,8 +354,6 @@ def main():
 
 def write_github_summary(results: Dict):
     """Write a summary to GitHub Actions step summary."""
-    import os
-
     summary_file = os.environ.get('GITHUB_STEP_SUMMARY')
     if not summary_file:
         return
@@ -457,5 +454,4 @@ def write_github_summary(results: Dict):
             f.write("\n⚠️ **No workflows were triggered**\n")
 
 if __name__ == "__main__":
-    import os
     sys.exit(main())
