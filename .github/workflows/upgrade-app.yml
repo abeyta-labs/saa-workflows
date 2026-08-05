@@ -290,8 +290,20 @@ jobs:
           
           if grep -q "$MAPPING_MISSING_PHRASE" $UPGRADE_PLAN_OUTPUT; then
             echo "Mappings are missing, lets create new mapping jobs"
-            # parse out the missing artifacts from saa output
-            grep -E $'^\t- [a-zA-Z]' "$UPGRADE_PLAN_OUTPUT" | sed $'s/^\t- //' > artifacts.txt
+            # Parse the missing artifacts out of the advisor output. Only the block
+            # under the "Please request your administrator..." phrase holds real
+            # coordinates — newer CLIs also print single-tab bullets elsewhere
+            # ("Projects discovered:" entries like "shedlock: 7.7.x (no upgrades
+            # available)", warning lines), which a bare '^\t- ' grep scoops up as
+            # fake artifacts. Coordinates never contain whitespace, so require
+            # exactly groupId:artifactId and stop at the first non-tab line.
+            awk -v phrase="$MAPPING_MISSING_PHRASE" '
+              index($0, phrase) { in_block = 1; next }
+              in_block && /^\t- [A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/ { sub(/^\t- /, ""); print; next }
+              in_block && /^[^\t]/ && NF { in_block = 0 }
+            ' "$UPGRADE_PLAN_OUTPUT" > artifacts.txt
+            echo "Extracted $(wc -l < artifacts.txt) missing artifacts:"
+            cat artifacts.txt
             # move artifacts file into saa workflows and work from there
             cp artifacts.txt .github/abeyta-labs/saa-workflows/scripts/artifacts.txt
             cd .github/abeyta-labs/saa-workflows/scripts
@@ -313,9 +325,9 @@ jobs:
             [[ -n "${{ inputs.saa-path }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--path" "${{ inputs.saa-path }}")
             [[ "${{ inputs.saa-force }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--force")
             [[ "${{ inputs.saa-remove-excluded-artifacts }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--remove-excluded-artifacts")
-            [[ -n "${{ inputs.saa-build-tool }}" ]] && BUILD_CONFIG_CMD+=("--build-tool" "${{ inputs.saa-build-tool }}")
+            [[ -n "${{ inputs.saa-build-tool }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--build-tool" "${{ inputs.saa-build-tool }}")
             [[ -n "${{ inputs.saa-build-tool-options }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--build-tool-options" "${{ inputs.saa-build-tool-options }}")
-            [[ -n "${{ inputs.saa-build-tool-jvm-args }}" ]] && BUILD_CONFIG_CMD+=("--build-tool-jvm-args" "${{ inputs.saa-build-tool-jvm-args }}")
+            [[ -n "${{ inputs.saa-build-tool-jvm-args }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--build-tool-jvm-args" "${{ inputs.saa-build-tool-jvm-args }}")
             [[ -n "${{ inputs.saa-squash }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--squash" "${{ inputs.saa-squash }}")
             [[ -n "${{ inputs.saa-after-upgrade-command }}" ]] && UPGRADE_PLAN_APPLY_CMD+=("--after-upgrade-cmd" "${{ inputs.saa-after-upgrade-command }}")
             [[ "${{ inputs.saa-create-pr }}" == "true" ]] && UPGRADE_PLAN_APPLY_CMD+=("--push")
@@ -332,7 +344,7 @@ jobs:
             if [ -f "pom.xml" ]; then
               echo "Upgrading patch versions of spring in maven project"
               ./mvnw org.openrewrite.maven:rewrite-maven-plugin:run \
-                -Drewrite.configLocation=https://raw.githubusercontent.com/abeyta-labs/saa-workflows/refs/heads/main/recipes/sprint-patch-versions.yaml \
+                -Drewrite.configLocation=https://raw.githubusercontent.com/abeyta-labs/saa-workflows/refs/heads/main/recipes/spring-patch-versions.yml \
                 -Drewrite.activeRecipes=me.abeyta.UpgradeAllSpringLatestPatch
           
               # Extract new Spring Boot version from pom.xml changes
@@ -364,7 +376,7 @@ jobs:
           
             if git diff --quiet && git diff --cached --quiet; then
               echo "No patch changes to commit."
-              return 1
+              exit 1
             fi
           
             branch_name="patch-upgrade-$(date +%Y%m%d-%H%M%S)"
