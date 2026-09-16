@@ -361,10 +361,16 @@ jobs:
           
           mv .advisor/mappings/* ../.advisor/mappings
 
+      # hashFiles takes FILE globs — the old '.advisor/errors/' (a bare directory
+      # path) matched nothing, so advisor failures rode continue-on-error to a green
+      # run (saa-mappings 2026-09-15: every hive version failed to resolve, the run
+      # succeeded and opened a PR deleting real version blocks). The CLI runs from
+      # ignore/, so the '**/' variant is the one that actually matches.
+      # Same fix as upgrade-app.yml.
       - name: Get errors if exist
-        if: always() && hashFiles('.advisor/errors/') != ''
+        if: always() && hashFiles('.advisor/errors/**', '**/.advisor/errors/**') != ''
         run: |
-          cat .advisor/errors/*
+          find . -path '*/.advisor/errors/*' -type f -print -exec cat {} \;
           exit 1
       - name: fail if error outside advisor
         if: steps.create-mapping.outcome == 'failure'
