@@ -263,7 +263,7 @@ jobs:
           BRANCH_PREFIX_FOR_UPGRADE: ${{ inputs.saa-branch-prefix }}
         run: |
           # The CLI was fetched and verified by the download step above (ADVISOR_TMP_DIR via GITHUB_ENV).
-          [ -x "$ADVISOR_TMP_DIR/advisor" ] || { echo "::error::no advisor CLI at \$ADVISOR_TMP_DIR"; exit 1; }
+          [ -x "$ADVISOR_TMP_DIR/advisor" ] || { echo "::error::no advisor CLI at '${ADVISOR_TMP_DIR:-<unset>}' — the download step did not export it"; exit 1; }
 
           if [[ "${{ inputs.upgrade-mode }}" == "patch" ]]; then
             echo "Running advisor in patch mode"
