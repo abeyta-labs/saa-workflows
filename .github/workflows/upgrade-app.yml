@@ -203,13 +203,48 @@ jobs:
                 }
             }
           EOF
+      # The CLI download is its OWN step, outside the advisor step's continue-on-error: a failed
+      # download used to hand an HTTP error body to tar inside that step, and since nothing had
+      # written .advisor/errors/ the run went GREEN having done nothing (boostertickets #649,
+      # 2026-09-28: the Broadcom token lasts 2 days, a 401 became a silent no-op patch run).
+      # A download failure is never an advisor finding — it must fail the job.
+      - name: Download Spring Application Advisor CLI
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
+          CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
+        run: |
+          set -o pipefail
+          [ -n "$CLI_DOWNLOAD_URL" ] || { echo "::error::vars.SPRING_APP_ADVISOR_DOWNLOAD_URL is empty"; exit 1; }
+          [ -n "$ARTIFACTORY_TOKEN" ] || { echo "::error::secrets.BROADCOM_SPRING_PASSWORD is empty"; exit 1; }
+
+          # Unique per-run dir so concurrent upgrade jobs on a shared/self-hosted
+          # host don't clobber each other's download/extraction under /tmp.
+          ADVISOR_TMP_DIR="$(mktemp -d)"
+          echo "ADVISOR_TMP_DIR=$ADVISOR_TMP_DIR" >> "$GITHUB_ENV"
+          echo "Downloading CLI from: $CLI_DOWNLOAD_URL into $ADVISOR_TMP_DIR"
+
+          # -f: an HTTP error fails curl instead of writing the error body where the tarball
+          # belongs; -w still reports the status so the refusal can name it.
+          rc=0
+          http=$(curl -fsSL \
+            --connect-timeout 15 --max-time 120 \
+            --retry 2 --retry-delay 10 --retry-all-errors \
+            -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+            -o "$ADVISOR_TMP_DIR/advisor-linux.tar" \
+            -w '%{http_code}' \
+            "$CLI_DOWNLOAD_URL") || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::SAA CLI download failed: HTTP ${http:-none}, curl exit $rc. 401/403 = the Broadcom token (secrets.BROADCOM_SPRING_PASSWORD) expired or lacks access; it lasts 2 days, rotate it. 404 = vars.SPRING_APP_ADVISOR_DOWNLOAD_URL names a version that does not exist."
+            exit 1
+          fi
+          tar -xf "$ADVISOR_TMP_DIR/advisor-linux.tar" -C "$ADVISOR_TMP_DIR" --strip-components=1 --exclude=./META-INF
+          [ -x "$ADVISOR_TMP_DIR/advisor" ] || { echo "::error::the downloaded archive holds no executable 'advisor'"; exit 1; }
+          echo "SAA CLI ready: HTTP $http, $(du -h "$ADVISOR_TMP_DIR/advisor-linux.tar" | cut -f1)"
       - name: Run Spring Application Advisor
         continue-on-error: true
         env:
           GIT_TOKEN_FOR_PRS: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_PULL_REQUEST_TOKEN }}
-          ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
-          CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
           # The broadcom.gradle init script reads these at GRADLE runtime and
           # silently drops the Broadcom repo when they're unset — which is exactly
           # what happened to every gradle-project advisor run before 2026-08-05:
@@ -227,16 +262,8 @@ jobs:
           SPRING_ADVISOR_MAPPING_CUSTOM_0_MERGE_STRATEGY: "override"
           BRANCH_PREFIX_FOR_UPGRADE: ${{ inputs.saa-branch-prefix }}
         run: |
-          # download the cli
-          echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
-
-          # Unique per-run dir so concurrent upgrade jobs on a shared/self-hosted
-          # host don't clobber each other's download/extraction under /tmp.
-          ADVISOR_TMP_DIR="$(mktemp -d)"
-          echo "Using temp dir: $ADVISOR_TMP_DIR"
-
-          curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o "$ADVISOR_TMP_DIR/advisor-linux.tar" -X GET $CLI_DOWNLOAD_URL
-          tar -xf "$ADVISOR_TMP_DIR/advisor-linux.tar" -C "$ADVISOR_TMP_DIR" --strip-components=1 --exclude=./META-INF
+          # The CLI was fetched and verified by the download step above (ADVISOR_TMP_DIR via GITHUB_ENV).
+          [ -x "$ADVISOR_TMP_DIR/advisor" ] || { echo "::error::no advisor CLI at \$ADVISOR_TMP_DIR"; exit 1; }
 
           if [[ "${{ inputs.upgrade-mode }}" == "patch" ]]; then
             echo "Running advisor in patch mode"
