@@ -1,0 +1,22 @@
+# Executes the reusable workflows' shell where a defect ships silently (boostertickets #649:
+# a failed SAA CLI download read GREEN). Runs on every PR and on main.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  cli-download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: CLI download step fails loud (executed, not grepped)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 scripts/test_cli_download.py
