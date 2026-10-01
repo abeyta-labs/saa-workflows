@@ -2,14 +2,16 @@
 """Pins each reusable workflow's "Get errors if exist" step — the backstop that turns advisor
 errors into a red run, since the advisor step itself is continue-on-error.
 
-Why: hashFiles() takes FILE globs, and a bare directory path ('.advisor/errors/') matches no
-file, so the step never ran and advisor failures went GREEN — twice (boostertickets 2026-08-04
-via upgrade-app; saa-mappings 2026-09-15 via create-mapping: a green run opened a PR deleting
-real version blocks). build-mapping kept the bare path until #7.
+Why: hashFiles() patterns are anchored at the workspace root, and the CLI does not always write
+there — from ignore/ (create-mapping) or a saa-path subdirectory (upgrade-app). The old
+'.advisor/errors/' missed both, the step never ran, and advisor failures went GREEN — twice
+(boostertickets 2026-08-04, saa-path: backend; saa-mappings 2026-09-15: a green run opened a PR
+deleting real version blocks). Both were first misdiagnosed as "a bare directory matches no
+file"; it doesn't — see hashfiles_matches.
 
 The step's `if:` is evaluated by the platform, never by PR CI, so this test evaluates the
-hashFiles patterns from the parsed YAML against a fixture tree with a files-only glob (the
-property both incidents turned on), then executes the step body against the same tree.
+hashFiles patterns from the parsed YAML against a fixture tree where each workflow's CLI really
+writes, with a model of @actions/glob, then executes the step body against the same tree.
 """
 import glob
 import os
@@ -54,10 +56,21 @@ def hash_patterns(cond):
 
 
 def hashfiles_matches(patterns, workspace):
-    """Files (never directories) the patterns match — hashFiles hashes files, so a pattern that
-    names only a directory hashes nothing and returns ''."""
-    hits = set()
+    """Files the patterns match, modelled on the runner's hashFiles (actions/runner
+    src/Misc/expressionFunc/hashFiles/src/hashFiles.ts) over @actions/glob:
+    - glob.create() is called without options, so implicitDescendants is true: a pattern with a
+      trailing separator or a last segment other than '**' ALSO matches '<pattern>/**'
+      (actions/toolkit packages/glob/src/internal-globber.ts) — '.advisor/errors/' does match
+      '.advisor/errors/x' at the root;
+    - hidden files are not excluded (dot: true), so '**' walks into .advisor;
+    - directories are skipped, only files are hashed."""
+    expanded = []
     for pat in patterns:
+        expanded.append(pat)
+        if pat.endswith("/") or pat.rstrip("/").split("/")[-1] != "**":
+            expanded.append(pat.rstrip("/") + "/**")
+    hits = set()
+    for pat in expanded:
         for rel in glob.glob(pat, root_dir=workspace, recursive=True, include_hidden=True):
             if pathlib.Path(workspace, rel).is_file():
                 hits.add(rel)

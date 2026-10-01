@@ -381,12 +381,13 @@ jobs:
           
           mv .advisor/mappings/* ../.advisor/mappings
 
-      # hashFiles takes FILE globs — the old '.advisor/errors/' (a bare directory
-      # path) matched nothing, so advisor failures rode continue-on-error to a green
-      # run (saa-mappings 2026-09-15: every hive version failed to resolve, the run
-      # succeeded and opened a PR deleting real version blocks). The CLI runs from
-      # ignore/, so the '**/' variant is the one that actually matches.
-      # Same fix as upgrade-app.yml.
+      # hashFiles patterns are anchored at the workspace root. The old '.advisor/errors/'
+      # (searched as '.advisor/errors/**' — @actions/glob's implicitDescendants) only
+      # matched errors at the root, but the CLI runs from ignore/ and writes them there,
+      # so advisor failures rode continue-on-error to a green run (saa-mappings
+      # 2026-09-15: every hive version failed to resolve, the run succeeded and opened a
+      # PR deleting real version blocks). The '**/' variant is the one that matches.
+      # Same fix as upgrade-app.yml; pinned by scripts/test_errors_step.py.
       - name: Get errors if exist
         if: always() && hashFiles('.advisor/errors/**', '**/.advisor/errors/**') != ''
         run: |

@@ -485,10 +485,13 @@ jobs:
           
           # clean up
           rm -rf "$ADVISOR_TMP_DIR"
-      # hashFiles takes FILE globs — the old '.advisor/errors/' (a bare directory
-      # path) matched nothing, so advisor failures rode continue-on-error to a green
-      # run (boostertickets 2026-08-04: dependency resolution failed, job succeeded).
-      # The '**/' variant also catches errors written under a saa-path subdirectory.
+      # hashFiles patterns are anchored at the workspace root. The old '.advisor/errors/'
+      # (searched as '.advisor/errors/**' — @actions/glob's implicitDescendants) only
+      # matched errors at the root, but with a saa-path the CLI writes them under that
+      # subdirectory, so advisor failures rode continue-on-error to a green run
+      # (boostertickets 2026-08-04, saa-path: backend — dependency resolution failed,
+      # job succeeded). The '**/' variant catches the saa-path location; pinned by
+      # scripts/test_errors_step.py.
       - name: Get errors if exist
         if: always() && hashFiles('.advisor/errors/**', '**/.advisor/errors/**') != ''
         run: |
