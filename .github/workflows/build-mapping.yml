@@ -331,10 +331,14 @@ jobs:
             ${SAA_DEBUG:+--debug} \
             ${{ inputs.offline && '-o' || '' }}
 
+      # hashFiles takes FILE globs — the old '.advisor/errors/' (a bare directory
+      # path) matched nothing, so advisor failures rode continue-on-error to a green
+      # run; create-mapping.yml and upgrade-app.yml hit that and were fixed the same
+      # way (#7 for this file). Pinned by scripts/test_errors_step.py.
       - name: Get errors if exist
-        if: always() && hashFiles('.advisor/errors/') != ''
+        if: always() && hashFiles('.advisor/errors/**', '**/.advisor/errors/**') != ''
         run: |
-          cat .advisor/errors/*
+          find . -path '*/.advisor/errors/*' -type f -print -exec cat {} \;
           exit 1
       - name: fail if error outside advisor
         if: steps.build-mapping.outcome == 'failure'
