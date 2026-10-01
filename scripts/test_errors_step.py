@@ -63,7 +63,8 @@ def hashfiles_matches(patterns, workspace):
       (actions/toolkit packages/glob/src/internal-globber.ts) — '.advisor/errors/' does match
       '.advisor/errors/x' at the root;
     - hidden files are not excluded (dot: true), so '**' walks into .advisor;
-    - directories are skipped, only files are hashed."""
+    - directories are skipped, only files are hashed.
+    Not modelled: negated ('!') patterns — no workflow uses one."""
     expanded = []
     for pat in patterns:
         expanded.append(pat)
