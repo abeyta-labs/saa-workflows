@@ -331,10 +331,15 @@ jobs:
             ${SAA_DEBUG:+--debug} \
             ${{ inputs.offline && '-o' || '' }}
 
+      # Same patterns as create-mapping.yml/upgrade-app.yml. hashFiles patterns are
+      # anchored at the workspace root; this CLI runs from the root, so the old
+      # '.advisor/errors/' (searched as '.advisor/errors/**') already matched there —
+      # the '**/' variant only covers errors written in a subdirectory. Pinned by
+      # scripts/test_errors_step.py.
       - name: Get errors if exist
-        if: always() && hashFiles('.advisor/errors/') != ''
+        if: always() && hashFiles('.advisor/errors/**', '**/.advisor/errors/**') != ''
         run: |
-          cat .advisor/errors/*
+          find . -path '*/.advisor/errors/*' -type f -print -exec cat {} \;
           exit 1
       - name: fail if error outside advisor
         if: steps.build-mapping.outcome == 'failure'

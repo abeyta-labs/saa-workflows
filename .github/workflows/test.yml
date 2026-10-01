@@ -20,3 +20,5 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           python3 scripts/test_cli_download.py
+      - name: Errors step fires on advisor errors (patterns evaluated, body executed)
+        run: python3 scripts/test_errors_step.py

@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Pins each reusable workflow's "Get errors if exist" step — the backstop that turns advisor
+errors into a red run, since the advisor step itself is continue-on-error.
+
+Why: hashFiles() patterns are anchored at the workspace root, and the CLI does not always write
+there — from ignore/ (create-mapping) or a saa-path subdirectory (upgrade-app). The old
+'.advisor/errors/' missed both, the step never ran, and advisor failures went GREEN — twice
+(boostertickets 2026-08-04, saa-path: backend; saa-mappings 2026-09-15: a green run opened a PR
+deleting real version blocks). Both were first misdiagnosed as "a bare directory matches no
+file"; it doesn't — see hashfiles_matches.
+
+The step's `if:` is evaluated by the platform, never by PR CI, so this test evaluates the
+hashFiles patterns from the parsed YAML against a fixture tree where each workflow's CLI really
+writes, with a model of @actions/glob, then executes the step body against the same tree.
+"""
+import glob
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+
+import yaml
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
+STEP = "Get errors if exist"
+# workflow file -> where its advisor run writes .advisor/errors (relative to the workspace)
+ERROR_DIRS = {
+    "build-mapping.yml": [".advisor/errors"],                 # CLI runs from the checkout root
+    "create-mapping.yml": ["ignore/.advisor/errors"],         # CLI runs from the ignore/ clone
+    "upgrade-app.yml": [".advisor/errors", "app/.advisor/errors"],  # root, or a saa-path subdir
+}
+
+failures = []
+
+
+def fail(msg):
+    failures.append(msg)
+    print(f"FAIL: {msg}")
+
+
+def errors_step(fname):
+    wf = yaml.safe_load((WORKFLOWS / fname).read_text())
+    found = [s for job in wf["jobs"].values() for s in job.get("steps", []) if s.get("name") == STEP]
+    if len(found) != 1:
+        fail(f"{fname}: expected one '{STEP}' step, found {len(found)}")
+        return None
+    return found[0]
+
+
+def hash_patterns(cond):
+    call = re.search(r"hashFiles\(([^)]*)\)", cond or "")
+    return re.findall(r"'([^']*)'", call.group(1)) if call else []
+
+
+def hashfiles_matches(patterns, workspace):
+    """Files the patterns match, modelled on the runner's hashFiles (actions/runner
+    src/Misc/expressionFunc/hashFiles/src/hashFiles.ts) over @actions/glob:
+    - glob.create() is called without options, so implicitDescendants is true: a pattern with a
+      trailing separator or a last segment other than '**' ALSO matches '<pattern>/**'
+      (actions/toolkit packages/glob/src/internal-globber.ts) — '.advisor/errors/' does match
+      '.advisor/errors/x' at the root;
+    - hidden files are not excluded (dot: true), so '**' walks into .advisor;
+    - directories are skipped, only files are hashed.
+    Not modelled: negated ('!') patterns — no workflow uses one."""
+    expanded = []
+    for pat in patterns:
+        expanded.append(pat)
+        if pat.endswith("/") or pat.rstrip("/").split("/")[-1] != "**":
+            expanded.append(pat.rstrip("/") + "/**")
+    hits = set()
+    for pat in expanded:
+        for rel in glob.glob(pat, root_dir=workspace, recursive=True, include_hidden=True):
+            if pathlib.Path(workspace, rel).is_file():
+                hits.add(rel)
+    return hits
+
+
+def seed(workspace, errors_dir=None):
+    # Every advisor run leaves a mapping/build output — none of it may trip the errors step.
+    out = pathlib.Path(workspace, ".advisor/mappings")
+    out.mkdir(parents=True)
+    (out / "x.json").write_text("{}")
+    if errors_dir:
+        d = pathlib.Path(workspace, errors_dir)
+        d.mkdir(parents=True)
+        (d / "error-1.txt").write_text(f"ADVISOR-ERROR from {errors_dir}\n")
+
+
+def main():
+    cases = 0
+    for fname, dirs in ERROR_DIRS.items():
+        step = errors_step(fname)
+        if step is None:
+            continue
+        cond = step.get("if", "")
+        if "always()" not in cond:
+            fail(f"{fname}: '{STEP}' if: lacks always() — a failed earlier step would skip the backstop: {cond!r}")
+        patterns = hash_patterns(cond)
+        if not patterns:
+            fail(f"{fname}: '{STEP}' if: carries no hashFiles(...) patterns: {cond!r}")
+            continue
+
+        with tempfile.TemporaryDirectory() as clean:
+            seed(clean)
+            cases += 1
+            hits = hashfiles_matches(patterns, clean)
+            if hits:
+                fail(f"{fname}: {patterns} match {sorted(hits)} with no errors written — the step would fire on every run")
+            else:
+                print(f"ok: {fname} [no errors written: step skipped]")
+
+        for errors_dir in dirs:
+            with tempfile.TemporaryDirectory() as ws:
+                seed(ws, errors_dir)
+                cases += 1
+                if not hashfiles_matches(patterns, ws):
+                    fail(f"{fname} [{errors_dir}]: hashFiles{tuple(patterns)} matches no file — advisor errors would read green")
+                    continue
+                # GitHub runs `run:` bodies with `bash -e {0}` when no shell is set.
+                p = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=ws, capture_output=True, text=True,
+                                   timeout=30, env={"PATH": os.environ["PATH"], "HOME": ws})
+                out = p.stdout + p.stderr
+                if p.returncode == 0 or f"ADVISOR-ERROR from {errors_dir}" not in out:
+                    fail(f"{fname} [{errors_dir}]: step body exit {p.returncode}, want non-zero printing the error\n{out[-400:]}")
+                else:
+                    print(f"ok: {fname} [{errors_dir}: step fires, prints the error, exit {p.returncode}]")
+
+    if failures:
+        print(f"{len(failures)} failure(s)")
+        return 1
+    print(f"test_errors_step: OK — {cases} executed cases across {len(ERROR_DIRS)} workflows")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
