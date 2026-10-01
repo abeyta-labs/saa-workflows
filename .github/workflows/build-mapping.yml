@@ -261,28 +261,65 @@ jobs:
           
           cd ..
           rm -rf ignore
+      # The CLI fetch is its OWN step, outside the mapping step's continue-on-error (#5, the
+      # upgrade-app.yml fix from #4): inside it, a failed download (the Broadcom token lasts 2
+      # days, so a 401 is the common case) was masked and surfaced only as the anonymous
+      # "fail if error outside advisor" exit. A download failure is never a mapping finding.
+      - name: Download Spring Application Advisor CLI
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
+          CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
+          RUNS_ON: ${{ inputs.runs-on }}
+        run: |
+          set -o pipefail
+          # A runner labelled exactly 'self-hosted' carries a preinstalled advisor on PATH.
+          if [ "$RUNS_ON" = "self-hosted" ]; then
+            cli="$(command -v advisor)" || { echo "::error::runs-on is 'self-hosted' but no 'advisor' is on PATH — install it on the runner, or pass a runs-on that downloads it"; exit 1; }
+            echo "ADVISOR_CLI=$cli" >> "$GITHUB_ENV"
+            echo "SAA CLI ready: preinstalled $cli"
+            exit 0
+          fi
+          [ -n "$CLI_DOWNLOAD_URL" ] || { echo "::error::vars.SPRING_APP_ADVISOR_DOWNLOAD_URL is empty"; exit 1; }
+          [ -n "$ARTIFACTORY_TOKEN" ] || { echo "::error::secrets.BROADCOM_SPRING_PASSWORD is empty"; exit 1; }
+
+          # Unique per-run dir so concurrent mapping jobs on a shared/self-hosted
+          # host don't clobber each other's download/extraction under /tmp.
+          ADVISOR_TMP_DIR="$(mktemp -d)"
+          echo "ADVISOR_TMP_DIR=$ADVISOR_TMP_DIR" >> "$GITHUB_ENV"
+          echo "Downloading CLI from: $CLI_DOWNLOAD_URL into $ADVISOR_TMP_DIR"
+
+          # -f: an HTTP error fails curl instead of writing the error body where the tarball
+          # belongs; -w still reports the status so the refusal can name it.
+          rc=0
+          http=$(curl -fsSL \
+            --connect-timeout 15 --max-time 120 \
+            --retry 2 --retry-delay 10 --retry-all-errors \
+            -H "Authorization: Bearer $ARTIFACTORY_TOKEN" \
+            -o "$ADVISOR_TMP_DIR/advisor-linux.tar" \
+            -w '%{http_code}' \
+            "$CLI_DOWNLOAD_URL") || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::SAA CLI download failed: HTTP ${http:-none}, curl exit $rc. 401/403 = the Broadcom token (secrets.BROADCOM_SPRING_PASSWORD) expired or lacks access; it lasts 2 days, rotate it. 404 = vars.SPRING_APP_ADVISOR_DOWNLOAD_URL names a version that does not exist."
+            exit 1
+          fi
+          tar -xf "$ADVISOR_TMP_DIR/advisor-linux.tar" -C "$ADVISOR_TMP_DIR" --strip-components=1 --exclude=./META-INF
+          [ -x "$ADVISOR_TMP_DIR/advisor" ] || { echo "::error::the downloaded archive holds no executable 'advisor'"; exit 1; }
+          echo "ADVISOR_CLI=$ADVISOR_TMP_DIR/advisor" >> "$GITHUB_ENV"
+          echo "SAA CLI ready: HTTP $http, $(du -h "$ADVISOR_TMP_DIR/advisor-linux.tar" | cut -f1)"
       - name: Build mapping
         id: build-mapping
         continue-on-error: true
         env:
-          ARTIFACTORY_TOKEN: ${{ secrets.BROADCOM_SPRING_PASSWORD }}
-          CLI_DOWNLOAD_URL: ${{ vars.SPRING_APP_ADVISOR_DOWNLOAD_URL }}
           MAPPING_CONFIG_REPO: ${{ inputs.repo-url }}
           MAPPING_CONFIG_COORDINATES: ${{ inputs.coordinates }}
           MAPPING_CONFIG_SLUG: ${{ inputs.mapping-name }}
           SAA_DEBUG: ${{ inputs.debug }}
           SAA_OFFLINE: ${{ inputs.offline }}
         run: |
-          cli="advisor"
-          
-          if [ "${{ inputs.runs-on }}" != "self-hosted" ]; then
-            # download the cli
-            echo "Downloading CLI from: $CLI_DOWNLOAD_URL"
-            curl -L -H "Authorization: Bearer $ARTIFACTORY_TOKEN"  -o /tmp/advisor-linux.tar -X GET $CLI_DOWNLOAD_URL
-            tar -xf /tmp/advisor-linux.tar -C /tmp/ --strip-components=1 --exclude=./META-INF
-            cli="/tmp/advisor"
-          fi
-          
+          # The CLI was fetched (or found preinstalled) by the download step above (ADVISOR_CLI via GITHUB_ENV).
+          [ -x "${ADVISOR_CLI:-}" ] || { echo "::error::no advisor CLI at '${ADVISOR_CLI:-<unset>}' — the download step did not export it"; exit 1; }
+          cli="$ADVISOR_CLI"
+
           echo "Running advisor with:"
           echo "  Git Repo: '$MAPPING_CONFIG_REPO'"
           echo "  Artifact Coordinates: '$MAPPING_CONFIG_COORDINATES'"
